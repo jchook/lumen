@@ -100,6 +100,17 @@ describe("burn", () => {
     const me = add(s, "light", 500, 500, cfg.minBurnMass, { name: "You" });
     expect(burn(s, me.id, 1, 0, 1, cfg)).toBe(false);
   });
+  test("exhaust fades away on its own", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    burn(s, me.id, 1, 0, 1, cfg);
+    const ex = s.bodies.find((b) => b.from === me.id)!;
+    const m0 = ex.mass;
+    run(s, cfg.exhaustHalfLife);
+    expect(ex.mass).toBeCloseTo(m0 / 2, 2);
+    run(s, 12);
+    expect(s.bodies.filter((b) => b.alive).length).toBe(1);
+  });
   test("exhaust is not instantly re-absorbed by its light", () => {
     const s = empty();
     const me = add(s, "light", 500, 500, 10, { name: "You" });

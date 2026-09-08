@@ -94,7 +94,7 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
   const candidates = stillWorth ? [committed!] : s.bodies;
   let best: { gain: number; dx: number; dy: number; n: number; id: number } | null = null;
   for (const o of candidates) {
-    if (o === b || !o.alive || o.mass >= b.mass || o.anchored) continue;
+    if (o === b || !o.alive || o.mass >= b.mass || o.anchored || o.from) continue;
     const [dx0, dy0] = delta(b.x, b.y, o.x, o.y, cfg);
     const d0 = Math.hypot(dx0, dy0);
     if (d0 > style.sense) continue;

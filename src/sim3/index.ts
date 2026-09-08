@@ -59,8 +59,9 @@ export interface Config {
   gravityMass: number;
   maxAccel: number;
   maxSpeed: number;
-  /** radius = radiusScale · √mass */
+  /** radius = radiusScale · √mass + radiusFloor, so specks are still catchable. */
   radiusScale: number;
+  radiusFloor: number;
   /** Mass per second per px of overlap flowing from lighter to heavier. */
   absorbRate: number;
   /** Fraction of mass thrown out by a full-strength burn. */
@@ -73,30 +74,34 @@ export interface Config {
   minBurnMass: number;
   /** Bodies below this mass vanish. */
   dust: number;
+  /** Exhaust is a flare, not food: its mass halves every this many seconds. */
+  exhaustHalfLife: number;
 }
 
 export const defaultConfig: Config = {
   width: 2400,
   height: 2400,
-  orbs: 48,
+  orbs: 72,
   orbMassMin: 0.4,
   orbMassMax: 120,
   giants: 3,
   middleweights: 3,
   players: 4,
   startMass: 8,
-  G: 3000,
+  G: 2200,
   soft: 40,
   gravityMass: 30,
   maxAccel: 500,
   maxSpeed: 400,
   radiusScale: 4,
+  radiusFloor: 3,
   absorbRate: 2.5,
-  burnFraction: 0.04,
-  ejectSpeed: 500,
-  burnCooldown: 0.15,
+  burnFraction: 0.045,
+  ejectSpeed: 900,
+  burnCooldown: 0.2,
   minBurnMass: 0.5,
   dust: 0.05,
+  exhaustHalfLife: 1.2,
 };
 
 export type Ev =
@@ -128,7 +133,7 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-export const radiusOf = (mass: number, cfg: Config): number => cfg.radiusScale * Math.sqrt(Math.max(0, mass));
+export const radiusOf = (mass: number, cfg: Config): number => cfg.radiusScale * Math.sqrt(Math.max(0, mass)) + cfg.radiusFloor;
 
 /** Shortest displacement from a to b on the torus. */
 export function delta(ax: number, ay: number, bx: number, by: number, cfg: Config): [number, number] {
@@ -337,12 +342,16 @@ function gravity(s: State, cfg: Config, dt: number): void {
   }
 }
 
-function move(s: State, cfg: Config, dt: number): void {
+function move(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   for (const b of s.bodies) {
     if (b.anchored || !b.alive) continue;
     b.x = wrap(b.x + b.vx * dt, cfg.width);
     b.y = wrap(b.y + b.vy * dt, cfg.height);
     if (b.cooldown > 0) b.cooldown = Math.max(0, b.cooldown - dt);
+    if (b.from) {
+      b.mass *= Math.pow(0.5, dt / cfg.exhaustHalfLife);
+      if (b.mass <= cfg.dust) vanish(s, b, 0, ev);
+    }
   }
 }
 
@@ -400,7 +409,7 @@ function finish(s: State, ev: Ev[]): void {
 export function step(s: State, cfg: Config, dt: number, ev: Ev[] = []): Ev[] {
   if (s.status !== "playing") return ev;
   gravity(s, cfg, dt);
-  move(s, cfg, dt);
+  move(s, cfg, dt, ev);
   absorb(s, cfg, dt, ev);
   // Sweep the dead so the pair loop stays cheap.
   s.bodies = s.bodies.filter((b) => b.alive || b.kind === "light");

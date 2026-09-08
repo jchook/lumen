@@ -417,6 +417,13 @@ function draw(dt: number): void {
     if (sx + r * 3 < 0 || sx - r * 3 > W || sy + r * 3 < 0 || sy - r * 3 > H) continue;
     const hue = hueOf(b, me);
     const isLight = b.kind === "light";
+    if (b.from) {
+      ctx.fillStyle = `hsla(${hue} / 0.55)`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.max(0.8, r * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
     const heavier = b.mass > me.mass && me.alive && b !== me;
     // Halo says threat or food; the core is white for lights, tinted for orbs.
     glow(sx, sy, r, hue, isLight ? 0.9 + s.flash * 0.3 : 0.75, isLight ? 2.8 : b.mass >= cfg.gravityMass ? 1.9 : 2);
@@ -570,6 +577,8 @@ const SLIDERS: SliderDef[] = [
   { key: "orbs", min: 10, max: 200, stepSize: 5, restart: true },
   { key: "startMass", min: 2, max: 30, stepSize: 1, restart: true },
   { key: "radiusScale", min: 2, max: 8, stepSize: 0.25 },
+  { key: "radiusFloor", min: 0, max: 8, stepSize: 0.5 },
+  { key: "exhaustHalfLife", min: 0.2, max: 6, stepSize: 0.1 },
 ];
 const slidersEl = $("sliders");
 function buildSliders(): void {
