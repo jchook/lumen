@@ -76,6 +76,8 @@ function resize(): void {
   canvas.height = Math.floor(H * dpr);
   canvas.style.width = `${W}px`;
   canvas.style.height = `${H}px`;
+  // Draw in CSS pixels; the backing store is dpr times larger.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener("resize", resize);
 resize();
@@ -275,7 +277,7 @@ const STARS = Array.from({ length: 260 }, (_, i) => ({ x: ((i * 7919) % 2400) / 
 
 function drawBackground(): void {
   ctx.fillStyle = "#05060c";
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(-2, -2, W + 4, H + 4);
   // Parallax starfield tiled on the torus at half the camera motion.
   const z = zoom();
   const tile = Math.min(cfg.width, cfg.height) * z;
