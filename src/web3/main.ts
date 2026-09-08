@@ -373,6 +373,8 @@ function drawEdgeMarkers(me: Body): void {
   const z = zoom();
   for (const t of threats(state, me, cfg)) {
     if (t.d > 1400) break;
+    // Only things that can come for me: lights, and bodies heavy enough to pull.
+    if (t.body.kind !== "light" && t.body.mass < cfg.gravityMass) continue;
     const [sx, sy] = toScreen(t.body.x, t.body.y);
     const r = radiusOf(t.body.mass, cfg) * z;
     if (sx + r > 0 && sx - r < W && sy + r > 0 && sy - r < H) continue;
