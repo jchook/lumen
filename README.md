@@ -13,6 +13,28 @@ bun run typecheck
 bun run build      # static bundle in dist/
 ```
 
+## v2: gravitational influence (`src/sim2/`)
+
+A rethink of the core after the v1 rules proved shallow (a one-step greedy bot was near optimal).
+Two lights, alternating turns, full information, no randomness after setup. A tap jumps you to an orb
+within reach and absorbs it; the landing is an impulse and the field keeps its momentum, so every
+move plays out over many turns. Wells that overlap siphon lumens from the smaller light to the
+larger. Big lights pull harder but jump shorter and pay more. The board is mirror-symmetric and the
+light is finite; more lumens when it is gone wins. `search()` is alpha-beta negamax over plies.
+
+`bun run depth` measures whether thinking further ahead keeps winning:
+
+| matchup            | deeper wins |
+| ------------------ | ----------- |
+| depth 1 vs 2       | 67%         |
+| depth 2 vs 3       | 63%         |
+| depth 3 vs 4       | 71%         |
+| depth 4 vs 5       | 56% (16 games) |
+| depth 1 vs 4       | 75%         |
+
+Leader at ply 12 wins 83% (depth-3 self-play). First mover wins 42%. In 87% of positions the top two
+moves are within 3 lumens of each other. No renderer yet.
+
 ## Layout
 
 - `src/sim/` — pure, headless game rules. No DOM. `step(state, tapId, cfg)` returns a new state

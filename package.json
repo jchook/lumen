@@ -16,6 +16,7 @@
     "build": "bun build src/web/index.html --outdir dist --minify",
     "typecheck": "tsc --noEmit",
     "bots": "bun scripts/bots.ts",
-    "grade": "bun scripts/grade.ts"
+    "grade": "bun scripts/grade.ts",
+    "depth": "bun scripts/depth.ts"
   }
 }
