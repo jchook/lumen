@@ -15,7 +15,20 @@ export {
   alivePlayers,
   playerById,
 } from "./board";
-export { step, pullDistance, edibleTargets, canEat, inRange, beginRound, arrive, settle, endRound } from "./step";
+export {
+  step,
+  pullDistance,
+  edibleTargets,
+  preyTargets,
+  allTargets,
+  resolveTarget,
+  canEat,
+  inRange,
+  beginRound,
+  arrive,
+  settle,
+  endRound,
+} from "./step";
 export type { Intent } from "./step";
 export { round, chooseTarget } from "./ai";
 export { nextRandom, randomSeed } from "./rng";

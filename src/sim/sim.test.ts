@@ -377,13 +377,43 @@ describe("opponents", () => {
     expect(r2.state.status).toBe("won");
   });
 
-  test("players are never tap targets", () => {
+  test("you can hunt an opponent you outweigh; one you don't is not a target", () => {
+    const s = board([[780, 780, SPARK]], vs);
+    const rival = s.players[1]!;
+    rival.light = 5;
+    rival.radius = playerRadius(5, vs);
+    const hunt = step(s, rival.id, vs); // single-actor: the rival cannot hop away
+    expect(hunt.events.some((e) => e.type === "eat" && e.predator.id === -1)).toBe(true);
+    expect(hunt.state.status).toBe("won");
+
+    rival.light = 100;
+    rival.radius = playerRadius(100, vs);
+    expect(step(s, rival.id, vs).state).toBe(s);
+    expect(round(s, rival.id, vs).turns).toHaveLength(0);
+  });
+
+  test("a hunted opponent that hops away first leaves you landing on empty space", () => {
     const s = board([], vs);
     const rival = s.players[1]!;
     rival.light = 5;
     rival.radius = playerRadius(5, vs);
-    expect(step(s, rival.id, vs).state).toBe(s);
-    expect(round(s, rival.id, vs).turns).toHaveLength(0);
+    // The rival's escape orb is right next to it, so it arrives long before you do.
+    s.orbs.push(makeOrb(s, rival.x + 40, rival.y, SPARK));
+    s.orbs.push(makeOrb(s, 780, 780, SPARK));
+    const r = round(s, rival.id, vs);
+    const mine = r.turns.find((t) => t.actor === -1)!;
+    expect(mine.events.some((e) => e.type === "miss")).toBe(true);
+    expect(playerById(r.state, rival.id)!.alive).toBe(true);
+    expect(r.state.status).toBe("playing");
+  });
+
+  test("a stranded opponent with no food can still be hunted, so the game does not stall", () => {
+    const s = board([[780, 780, SPARK]], vs);
+    const rival = s.players[1]!;
+    rival.light = 0.2;
+    rival.radius = playerRadius(0.2, vs);
+    const r = round(s, rival.id, vs);
+    expect(r.state.status).toBe("won");
   });
 });
 

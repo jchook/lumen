@@ -296,7 +296,8 @@ function startGame(newSeed: number): void {
 
 function updateHud(): void {
   const me = human(state);
-  elLight.textContent = `${Math.max(0, Math.floor(me.light))} lumens`;
+  const shown = me.light < 10 ? Math.max(0, me.light).toFixed(1) : String(Math.floor(me.light));
+  elLight.textContent = `${shown} lumens`;
   elScore.textContent = `score ${me.score}`;
   elTurn.textContent = `round ${state.turn} · speed ${effectiveSpeed(me, cfg).toFixed(2)}`;
   const rate = spawnRate(state.turn, cfg);
@@ -306,7 +307,7 @@ function updateHud(): void {
   elRivals.replaceChildren();
   for (const p of rivals) {
     const span = document.createElement("span");
-    span.textContent = p.alive ? `${p.name} ${Math.max(0, Math.round(p.light))}` : `${p.name} ✕`;
+    span.textContent = p.alive ? `${p.name} ${p.light < 10 ? Math.max(0, p.light).toFixed(1) : Math.floor(p.light)}` : `${p.name} ✕`;
     span.style.color = p.alive ? `rgb(${playerColor(p).glow})` : "";
     span.style.opacity = p.alive ? "0.9" : "0.4";
     span.style.marginRight = "12px";
@@ -441,11 +442,15 @@ function toWorld(clientX: number, clientY: number): { x: number; y: number } {
   return { x: (clientX - view.ox) / view.scale, y: (clientY - view.oy) / view.scale };
 }
 
-/** Nearest orb under the pointer. Players are absorbed by contact, never tapped. */
-function targetAt(p: { x: number; y: number }): Orb | null {
-  let best: Orb | null = null;
+type Tappable = { id: number; x: number; y: number; radius: number };
+
+/** Nearest orb under the pointer, or an opponent you outweigh. */
+function targetAt(p: { x: number; y: number }): Tappable | null {
+  let best: Tappable | null = null;
   let bestD = Infinity;
-  for (const o of state.orbs) {
+  const me = human(state);
+  const candidates: Tappable[] = [...state.orbs, ...state.players.filter((q) => q.alive && q.ai && q.light < me.light)];
+  for (const o of candidates) {
     const d = Math.hypot(o.x - p.x, o.y - p.y) - o.radius;
     if (d < 16 && d < bestD) {
       best = o;
@@ -616,9 +621,20 @@ function drawPlayer(s: Sprite, t: number, threat: boolean): void {
     ctx.font = "11px ui-monospace, Menlo, monospace";
     ctx.textAlign = "center";
     ctx.fillStyle = `rgba(${c.glow},0.85)`;
-    ctx.fillText(s.ai ? `${s.name} ${Math.max(0, Math.round(s.light))}` : `${Math.max(0, Math.round(s.light))}`, s.x, s.y + r + 14);
+    const lum = s.light < 10 ? Math.max(0, s.light).toFixed(1) : String(Math.floor(s.light));
+    ctx.fillText(s.ai ? `${s.name} ${lum}` : lum, s.x, s.y + r + 14);
   }
   if (threat && !s.dying) threatRing(s.x, s.y, r, t, s.phase);
+  else if (s.ai && !s.dying && s.light < human(state).light) {
+    // Prey: you outweigh it. Tap to hunt.
+    ctx.strokeStyle = `rgba(120,255,170,${0.35 + 0.2 * Math.sin(t * 4 + s.phase)})`;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([2, 5]);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r + 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 function drawPreview(): void {
@@ -674,7 +690,7 @@ function drawPreview(): void {
       ctx.stroke();
     }
   }
-  const target = hoverId === null ? null : state.orbs.find((o) => o.id === hoverId);
+  const target = hoverId === null ? null : [...state.orbs, ...state.players].find((o) => o.id === hoverId);
   if (target) {
     const net = human(next).light - human(state).light;
     const dead = preview.events.some((e) => (e.type === "blackout" && e.reason !== "dark") || e.type === "draw");

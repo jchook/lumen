@@ -263,14 +263,23 @@ export function inRange(actor: Player, target: { x: number; y: number }, cfg: Si
   return Math.hypot(target.x - actor.x, target.y - actor.y) <= reach(actor, cfg);
 }
 
-/**
- * Orbs that `actor` could tap and survive the landing. Players are never tap targets:
- * you absorb an opponent by contact only, by landing beside them or pulling them onto you.
- */
+/** Orbs that `actor` could tap and survive the landing. */
 export function edibleTargets(state: GameState, actorId: number, cfg: SimConfig): Orb[] {
   const actor = playerById(state, actorId);
   if (!actor || !actor.alive) return [];
   return state.orbs.filter((o) => canEat(actor, o) && inRange(actor, o, cfg));
+}
+
+/** Opponents `actor` outweighs and can reach: tap one to hunt it. */
+export function preyTargets(state: GameState, actorId: number, cfg: SimConfig): Player[] {
+  const actor = playerById(state, actorId);
+  if (!actor || !actor.alive) return [];
+  return state.players.filter((p) => p.alive && p !== actor && canEat(actor, p) && inRange(actor, p, cfg));
+}
+
+/** Everything `actor` may tap this round. */
+export function allTargets(state: GameState, actorId: number, cfg: SimConfig): Array<Orb | Player> {
+  return [...edibleTargets(state, actorId, cfg), ...preyTargets(state, actorId, cfg)];
 }
 
 // ---------- round phases ----------
@@ -298,11 +307,11 @@ export function beginRound(state: GameState, cfg: SimConfig): void {
   }
 }
 
-/** Where a player is heading this round. */
+/** Where a player is heading this round: an orb, or an opponent it outweighs (negative id). */
 export interface Intent {
   actor: number;
-  orbId: number;
-  /** The orb's position when the decision was made; where you land if it's gone by the time you arrive. */
+  targetId: number;
+  /** The target's position when the decision was made; where you land if it's gone by the time you arrive. */
   x: number;
   y: number;
 }
@@ -310,11 +319,26 @@ export interface Intent {
 /**
  * One player's arrival: pay for the trip, land, and absorb the orb if it is still there.
  * Landing on something bigger is jumping into its mouth. A collection pulls the whole board.
+ * Hunting a player: if they are still where you aimed, you land on them and contact decides;
+ * if they already hopped away, you land on empty space.
  */
 export function arrive(state: GameState, intent: Intent, cfg: SimConfig, events: SimEvent[]): void {
   const actor = playerById(state, intent.actor);
   if (!actor || !actor.alive || state.status !== "playing") return;
-  const orb = state.orbs.find((o) => o.id === intent.orbId);
+  if (intent.targetId < 0) {
+    const prey = playerById(state, intent.targetId);
+    const there = !!prey && prey.alive && Math.hypot(prey.x - intent.x, prey.y - intent.y) <= prey.radius + actor.radius;
+    const dest = there ? { x: prey!.x, y: prey!.y } : intent;
+    const dist = Math.hypot(dest.x - actor.x, dest.y - actor.y);
+    const cost = travelCost(dist, actor.radius, cfg);
+    actor.light -= cost;
+    events.push({ type: "travel", actor: actor.id, dist, cost });
+    actor.x = dest.x;
+    actor.y = dest.y;
+    if (!there) events.push({ type: "miss", actor: actor.id, orbId: intent.targetId, at: { x: intent.x, y: intent.y } });
+    return;
+  }
+  const orb = state.orbs.find((o) => o.id === intent.targetId);
   let dest: { x: number; y: number } = orb ?? intent;
   if (!orb) {
     // Too late. Pull up short of whoever is standing where the light was, rather than into them.
@@ -334,7 +358,7 @@ export function arrive(state: GameState, intent: Intent, cfg: SimConfig, events:
   actor.x = dest.x;
   actor.y = dest.y;
   if (!orb) {
-    events.push({ type: "miss", actor: actor.id, orbId: intent.orbId, at: { x: intent.x, y: intent.y } });
+    events.push({ type: "miss", actor: actor.id, orbId: intent.targetId, at: { x: intent.x, y: intent.y } });
     return;
   }
   if (!edible) {
@@ -382,26 +406,34 @@ export function endRound(state: GameState, cfg: SimConfig, events: SimEvent[]): 
     events.push({ type: "win" });
     return;
   }
-  if (edibleTargets(state, me.id, cfg).length === 0) eliminate(state, me, "dark", events);
+  if (allTargets(state, me.id, cfg).length === 0) eliminate(state, me, "dark", events);
 }
 
 /**
  * One tap by one player with nobody else moving. Pure. This is the single-player game and the
  * primitive opponents use to evaluate their options; `round` in ai.ts is the multiplayer round.
  */
+/** The orb or prey `actor` may tap by id, or undefined if that tap is not a move. */
+export function resolveTarget(state: GameState, actorId: number, targetId: number, cfg: SimConfig): Orb | Player | undefined {
+  const actor = playerById(state, actorId);
+  if (!actor || !actor.alive) return undefined;
+  if (targetId < 0) return preyTargets(state, actorId, cfg).find((p) => p.id === targetId);
+  const orb = state.orbs.find((o) => o.id === targetId);
+  return orb && inRange(actor, orb, cfg) ? orb : undefined;
+}
+
 export function step(prev: GameState, targetId: number, cfg: SimConfig, actorId: number = human(prev).id): StepResult {
   const events: SimEvent[] = [];
   if (prev.status !== "playing") return { state: prev, events };
-  const actor = playerById(prev, actorId);
-  const orb = prev.orbs.find((o) => o.id === targetId);
-  if (!actor || !actor.alive || !orb || !inRange(actor, orb, cfg)) return { state: prev, events };
+  const target = resolveTarget(prev, actorId, targetId, cfg);
+  if (!target) return { state: prev, events };
   const state = cloneState(prev);
   const isHuman = actorId === human(prev).id;
   if (isHuman) {
     state.turn += 1;
     beginRound(state, cfg);
   }
-  arrive(state, { actor: actorId, orbId: orb.id, x: orb.x, y: orb.y }, cfg, events);
+  arrive(state, { actor: actorId, targetId: target.id, x: target.x, y: target.y }, cfg, events);
   settle(state, cfg, events);
   if (isHuman) endRound(state, cfg, events);
   return { state, events };

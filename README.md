@@ -36,8 +36,9 @@ bun run build      # static bundle in dist/
   whole board toward that point, other players included. Heavy orbs move less (inertia).
 - **Lumens decide who absorbs whom.** Every orb is worth lumens (a void carries the two stars that made
   it plus everything it swallowed) and every light holds lumens. On contact, more lumens absorbs fewer.
-  An orb worth up to your lumens is food; one worth more eats you. Players are never tap targets: you
-  absorb an opponent only by contact, with even one lumen more. Equal lumens meeting you is a draw.
+  An orb worth up to your lumens is food; one worth more eats you. Tap an opponent you outweigh
+  (within reach) to hunt them: if they hop away first you land on empty space, otherwise contact
+  decides. Opponents hunt you the same way. Equal lumens meeting you is a draw.
   Whether you can take an orb is decided as you leave; the trip can still fade you.
 - **Light is fuel, score and size.** Travel costs light by distance and radius. Below zero you fade.
   Radius grows with light held. Everyone starts tiny (3 light) and on equal footing.

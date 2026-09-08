@@ -1,5 +1,5 @@
 import { alivePlayers, cloneState, effectiveSpeed, human, playerById, reach } from "./board";
-import { arrive, beginRound, canEat, edibleTargets, endRound, inRange, settle, type Intent } from "./step";
+import { allTargets, arrive, beginRound, canEat, endRound, inRange, resolveTarget, settle, type Intent } from "./step";
 import { GUST, type GameState, type RoundResult, type SimConfig, type SimEvent } from "./types";
 
 const gap = (a: { x: number; y: number; radius: number }, b: { x: number; y: number; radius: number }) =>
@@ -24,22 +24,24 @@ export function chooseTarget(state: GameState, actorId: number, cfg: SimConfig):
   const nearestPreyGap = preyBefore.length ? Math.min(...preyBefore.map((p) => gap(actor, p))) : null;
   let bestId: number | null = null;
   let best = -Infinity;
-  for (const t of edibleTargets(state, actorId, cfg)) {
+  for (const t of allTargets(state, actorId, cfg)) {
     const trial = cloneState(state);
     const ev: SimEvent[] = [];
-    arrive(trial, { actor: actorId, orbId: t.id, x: t.x, y: t.y }, cfg, ev);
+    arrive(trial, { actor: actorId, targetId: t.id, x: t.x, y: t.y }, cfg, ev);
     settle(trial, cfg, ev);
     const me = playerById(trial, actorId)!;
     if (!me.alive) continue;
     let v = me.light - actor.light;
-    if (t.kind === GUST) v += cfg.gustBoost * 8;
+    if ("kind" in t && t.kind === GUST) v += cfg.gustBoost * 8;
     for (const e of ev) if (e.type === "eat" && e.predator.id === actorId) v += 60;
-    // Contest: if someone who can eat this orb would get there first, it's probably not ours.
-    const myEta = eta(actor, t, cfg);
-    for (const p of others) {
-      if (canEat(p, t) && inRange(p, t, cfg) && eta(p, t, cfg) < myEta) {
-        v = Math.min(v, 0) - 0.5;
-        break;
+    if ("kind" in t) {
+      // Contest: if someone who can eat this orb would get there first, it's probably not ours.
+      const myEta = eta(actor, t, cfg);
+      for (const p of others) {
+        if (canEat(p, t) && inRange(p, t, cfg) && eta(p, t, cfg) < myEta) {
+          v = Math.min(v, 0) - 0.5;
+          break;
+        }
       }
     }
     // Hunt: reward closing the gap to the nearest smaller player.
@@ -69,18 +71,19 @@ export function chooseTarget(state: GameState, actorId: number, cfg: SimConfig):
  */
 export function round(prev: GameState, targetId: number, cfg: SimConfig): RoundResult {
   const me = human(prev);
-  const orb = prev.orbs.find((o) => o.id === targetId);
-  if (prev.status !== "playing" || !me.alive || !orb || !inRange(me, orb, cfg)) return { state: prev, turns: [], events: [] };
+  if (prev.status !== "playing") return { state: prev, turns: [], events: [] };
+  const target = resolveTarget(prev, me.id, targetId, cfg);
+  if (!target) return { state: prev, turns: [], events: [] };
 
   const intents: Array<Intent & { eta: number; light: number }> = [
-    { actor: me.id, orbId: orb.id, x: orb.x, y: orb.y, eta: eta(me, orb, cfg), light: me.light },
+    { actor: me.id, targetId: target.id, x: target.x, y: target.y, eta: eta(me, target, cfg), light: me.light },
   ];
   for (const p of prev.players) {
     if (!p.ai || !p.alive) continue;
     const id = chooseTarget(prev, p.id, cfg);
     if (id === null) continue;
-    const o = prev.orbs.find((x) => x.id === id)!;
-    intents.push({ actor: p.id, orbId: o.id, x: o.x, y: o.y, eta: eta(p, o, cfg), light: p.light });
+    const t = resolveTarget(prev, p.id, id, cfg)!;
+    intents.push({ actor: p.id, targetId: t.id, x: t.x, y: t.y, eta: eta(p, t, cfg), light: p.light });
   }
   intents.sort((a, b) => a.eta - b.eta || b.light - a.light || b.actor - a.actor);
 
