@@ -150,6 +150,8 @@ function dangerAhead(me: Body): { gap: number; body: Body } | null {
   let worst: { gap: number; body: Body } | null = null;
   for (const t of threats(state, me, cfg)) {
     if (t.d > 900) break;
+    // Passive heavier orbs can't chase or pull; they only matter when I'm about to touch them.
+    const active = t.body.kind === "light" || t.body.mass >= cfg.gravityMass;
     const R = radiusOf(t.body.mass, cfg) + radiusOf(me.mass, cfg);
     let gap = t.d;
     for (const p of path) {
@@ -157,6 +159,7 @@ function dangerAhead(me: Body): { gap: number; body: Body } | null {
       const g = Math.hypot(dx, dy) - R;
       if (g < gap) gap = g;
     }
+    if (!active && gap > 40) continue;
     if (!worst || gap < worst.gap) worst = { gap, body: t.body };
   }
   return worst;
