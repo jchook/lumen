@@ -6,6 +6,7 @@ import {
   defaultConfig,
   effectiveSpeed,
   human,
+  inRange,
   newFairGame,
   randomSeed,
   step,
@@ -513,7 +514,10 @@ function targetAt(p: { x: number; y: number }): Tappable | null {
   let best: Tappable | null = null;
   let bestD = Infinity;
   const me = human(state);
-  const candidates: Tappable[] = [...state.orbs, ...state.players.filter((q) => q.alive && q.ai && q.light < me.light)];
+  const candidates: Tappable[] = [
+    ...state.orbs.filter((o) => inRange(me, o, cfg)),
+    ...state.players.filter((q) => q.alive && q.ai && q.light < me.light && inRange(me, q, cfg)),
+  ];
   for (const o of candidates) {
     const d = Math.hypot(o.x - p.x, o.y - p.y) - o.radius;
     if (d < 16 && d < bestD) {
