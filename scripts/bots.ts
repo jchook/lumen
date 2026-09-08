@@ -12,7 +12,7 @@ const planner: Policy = (s, cfg) => {
 };
 const pols = {random, nearest, greedy, planner};
 const label = (c: Partial<SimConfig>) => Object.entries(c).map(([k,v])=>`${k}=${v}`).join(" ") || "defaults";
-for (const over of [{opponents: 0}, {opponents: 1}, {opponents: 2}, {opponents: 3}]) {
+for (const over of [{opponents: 1, aiSkill: 0.1}, {opponents: 1, aiSkill: 0.4}, {opponents: 1, aiSkill: 0.7}, {opponents: 1, aiSkill: 1}, {opponents: 2, aiSkill: 0.5}]) {
   const cfg = { ...defaultConfig, ...over }; CFG = cfg;
   const rows: string[] = [];
   for (const [name, pol] of Object.entries(pols)) {

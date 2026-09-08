@@ -124,6 +124,10 @@ export interface SimConfig {
   voidAppetite: number;
   /** Number of computer opponents. Absorb them all to win. */
   opponents: number;
+  /** How sharp the opponents are, 0–1. Low skill dithers, ignores prey, and misjudges danger. */
+  aiSkill: number;
+  /** Light each opponent starts with. 0 = same as you (equal footing). Lower is a handicap for early levels. */
+  opponentLight: number;
   /** How strongly collections drag other players, relative to orbs (0–1). */
   playerDrag: number;
   /** Reach of a jump at base size and speed 1 (px); actual reach scales with effective speed. 0 = unlimited. */
@@ -151,6 +155,8 @@ export const defaultConfig: SimConfig = {
   travelCost: 1,
   voidAppetite: 2,
   opponents: 1,
+  aiSkill: 0.5,
+  opponentLight: 0,
   playerDrag: 0.5,
   maxJump: 240,
 };

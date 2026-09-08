@@ -11,8 +11,9 @@
     <div id="hud">
       <div class="score"><span id="light">0</span></div>
       <div class="meta"><span id="score">score 0</span> · <span id="turn">turn 0</span> · <span id="orbs">0 orbs</span> · seed <span id="seed">0</span></div>
+      <div class="meta" id="level"></div>
       <div class="meta" id="rivals"></div>
-      <div class="meta keys">R new universe · T tuning</div>
+      <div class="meta keys">R new universe · [ ] change level · T tuning</div>
     </div>
     <div id="hint">collect the light</div>
     <aside id="panel" class="hidden">
@@ -28,6 +29,7 @@
       <div class="row">
         <label><input type="checkbox" id="preview" /> hover preview (cheat)</label>
         <label><input type="checkbox" id="springs" checked /> springs</label>
+        <label><input type="checkbox" id="ladder" checked /> ladder</label>
       </div>
       <div class="row">
         <button id="copy">copy config</button>

@@ -5,6 +5,16 @@ import { GUST, type GameState, type RoundResult, type SimConfig, type SimEvent }
 const gap = (a: { x: number; y: number; radius: number }, b: { x: number; y: number; radius: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y) - a.radius - b.radius;
 
+/** Deterministic noise in [0, 1) from the situation, so a low-skill opponent is sloppy but replayable. */
+function jitter(...parts: number[]): number {
+  let h = 0x811c9dc5;
+  for (const p of parts) {
+    h ^= Math.imul((p * 2654435761) | 0, 0x9e3779b1) ^ ((p * 1e4) | 0);
+    h = Math.imul(h ^ (h >>> 13), 0x85ebca6b);
+  }
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
 /** Time for `p` to reach (x, y). Lower arrives first. */
 function eta(p: { x: number; y: number; radius: number; speed: number }, t: { x: number; y: number }, cfg: SimConfig): number {
   return Math.hypot(t.x - p.x, t.y - p.y) / effectiveSpeed(p, cfg);
@@ -19,6 +29,9 @@ function eta(p: { x: number; y: number; radius: number; speed: number }, t: { x:
 export function chooseTarget(state: GameState, actorId: number, cfg: SimConfig): number | null {
   const actor = playerById(state, actorId);
   if (!actor || !actor.alive) return null;
+  const skill = Math.min(1, Math.max(0, cfg.aiSkill));
+  // A dull opponent sometimes just sits there.
+  if (jitter(state.seed, state.turn, actorId, 7) < 0.35 * (1 - skill)) return null;
   const others = alivePlayers(state).filter((p) => p !== actor);
   const preyBefore = others.filter((p) => canEat(actor, p));
   const nearestPreyGap = preyBefore.length ? Math.min(...preyBefore.map((p) => gap(actor, p))) : null;
@@ -33,7 +46,9 @@ export function chooseTarget(state: GameState, actorId: number, cfg: SimConfig):
     if (!me.alive) continue;
     let v = me.light - actor.light;
     if ("kind" in t && t.kind === GUST) v += cfg.gustBoost * 8;
-    for (const e of ev) if (e.type === "eat" && e.predator.id === actorId) v += 60;
+    for (const e of ev) if (e.type === "eat" && e.predator.id === actorId) v += 60 * skill;
+    // Sloppiness: misjudge every option by up to a few lumens.
+    v += (jitter(state.seed, state.turn, actorId, t.id) - 0.5) * 8 * (1 - skill);
     if ("kind" in t) {
       // Contest: if someone who can eat this orb would get there first, it's probably not ours.
       const myEta = eta(actor, t, cfg);
@@ -44,17 +59,17 @@ export function chooseTarget(state: GameState, actorId: number, cfg: SimConfig):
         }
       }
     }
-    // Hunt: reward closing the gap to the nearest smaller player.
-    if (nearestPreyGap !== null) {
+    // Hunt: reward closing the gap to the nearest smaller player. Dull opponents don't hunt.
+    if (nearestPreyGap !== null && skill > 0.3) {
       const prey = alivePlayers(trial).filter((p) => p !== me && canEat(me, p));
-      if (prey.length) v += 0.04 * (nearestPreyGap - Math.min(...prey.map((p) => gap(me, p))));
+      if (prey.length) v += 0.04 * skill * (nearestPreyGap - Math.min(...prey.map((p) => gap(me, p))));
     }
-    // Danger: anything bigger than me that could reach me next move.
+    // Danger: anything bigger than me that could reach me next move. Dull opponents underrate it.
     for (const p of alivePlayers(trial)) {
       if (p === me || !canEat(p, me)) continue;
       const d = gap(p, me);
       const strike = reach(p, cfg) + 30;
-      if (d < strike) v -= 80 * (1 - d / strike);
+      if (d < strike) v -= 80 * (0.25 + 0.75 * skill) * (1 - d / strike);
     }
     if (v > best || (v === best && bestId !== null && t.id < bestId)) {
       best = v;

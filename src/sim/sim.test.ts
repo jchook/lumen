@@ -277,6 +277,12 @@ describe("step (single player)", () => {
 describe("opponents", () => {
   const vs: SimConfig = { ...cfg, opponents: 1 };
 
+  test("opponents can be handicapped for early levels", () => {
+    const s = newGame(1, { ...vs, opponentLight: 2 });
+    expect(s.players[1]!.light).toBe(2);
+    expect(human(s).light).toBe(vs.startLight);
+  });
+
   test("newGame rings the human with named opponents on equal footing", () => {
     const s = newGame(1, { ...vs, opponents: 2 });
     expect(s.players.map((p) => p.id)).toEqual([-1, -2, -3]);

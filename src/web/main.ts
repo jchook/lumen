@@ -40,6 +40,45 @@ function saveConfig(): void {
 
 const cfg: SimConfig = loadConfig();
 
+// ---------- difficulty ladder ----------
+
+interface Level {
+  opponents: number;
+  aiSkill: number;
+  /** Opponent starting lumens; 0 = same as you. */
+  opponentLight: number;
+  note: string;
+}
+
+const LEVELS: Level[] = [
+  { opponents: 1, aiSkill: 0.1, opponentLight: 2, note: "Umbra is dim and slow to react" },
+  { opponents: 1, aiSkill: 0.25, opponentLight: 2, note: "Umbra is waking up" },
+  { opponents: 1, aiSkill: 0.4, opponentLight: 0, note: "equal footing" },
+  { opponents: 1, aiSkill: 0.6, opponentLight: 0, note: "Umbra hunts" },
+  { opponents: 1, aiSkill: 0.85, opponentLight: 0, note: "Umbra is sharp" },
+  { opponents: 2, aiSkill: 0.5, opponentLight: 0, note: "two of them" },
+  { opponents: 2, aiSkill: 0.8, opponentLight: 0, note: "two, and sharp" },
+  { opponents: 3, aiSkill: 0.7, opponentLight: 0, note: "three" },
+  { opponents: 3, aiSkill: 1, opponentLight: 0, note: "three, flawless" },
+  { opponents: 4, aiSkill: 1, opponentLight: 0, note: "four, flawless" },
+];
+const LEVEL_KEY = "lumen.level";
+
+function loadLevel(): number {
+  try {
+    const n = Number(localStorage.getItem(LEVEL_KEY));
+    if (Number.isFinite(n) && n >= 0 && n < LEVELS.length) return n;
+  } catch {}
+  return 0;
+}
+function saveLevel(n: number): void {
+  try {
+    localStorage.setItem(LEVEL_KEY, String(n));
+  } catch {}
+}
+let level = loadLevel();
+let levelCleared = false;
+
 interface SliderSpec {
   key: keyof SimConfig;
   min: number;
@@ -50,6 +89,8 @@ interface SliderSpec {
 
 const SLIDERS: SliderSpec[] = [
   { key: "opponents", min: 0, max: 6, step: 1, label: "opponents (new board)" },
+  { key: "aiSkill", min: 0, max: 1, step: 0.05, label: "opponent skill" },
+  { key: "opponentLight", min: 0, max: 20, step: 1, label: "opponent start lumens (0=same)" },
   { key: "maxJump", min: 0, max: 800, step: 10, label: "reach at base size px (0=∞)" },
   { key: "gustChance", min: 0, max: 0.5, step: 0.01, label: "gust chance" },
   { key: "gustBoost", min: 0, max: 1, step: 0.05, label: "gust speed boost" },
@@ -81,6 +122,8 @@ const elTurn = $("turn");
 const elOrbs = $("orbs");
 const elSeed = $("seed");
 const elRivals = $("rivals");
+const elLevel = $("level");
+const elLadder = $<HTMLInputElement>("ladder");
 const elHint = $("hint");
 const elPanel = $("panel");
 const elLog = $("log");
@@ -276,6 +319,14 @@ function syncSprites(fresh: boolean): void {
 
 function startGame(newSeed: number): void {
   seed = newSeed;
+  if (elLadder.checked) {
+    const L = LEVELS[level]!;
+    cfg.opponents = L.opponents;
+    cfg.aiSkill = L.aiSkill;
+    cfg.opponentLight = L.opponentLight;
+    buildSliders();
+  }
+  levelCleared = false;
   state = newGame(seed, cfg);
   sprites.clear();
   players.clear();
@@ -291,7 +342,7 @@ function startGame(newSeed: number): void {
   previewDirty = true;
   hoverId = null;
   updateHud();
-  log(`— new universe, seed ${seed}, ${cfg.opponents} opponent${cfg.opponents === 1 ? "" : "s"}`);
+  log(`— ${elLadder.checked ? `level ${level + 1}: ` : ""}seed ${seed}, ${cfg.opponents} opponent${cfg.opponents === 1 ? "" : "s"}, skill ${cfg.aiSkill}`);
 }
 
 function updateHud(): void {
@@ -303,6 +354,7 @@ function updateHud(): void {
   const rate = spawnRate(state.turn, cfg);
   elOrbs.textContent = `${state.orbs.length} orbs · ${rate > 0 ? `+${rate.toFixed(1)}/round` : "no more light"}`;
   elSeed.textContent = String(seed);
+  elLevel.textContent = elLadder.checked ? `level ${level + 1} of ${LEVELS.length} · ${LEVELS[level]!.note}` : "free play";
   const rivals = state.players.filter((p) => p.ai);
   elRivals.replaceChildren();
   for (const p of rivals) {
@@ -413,6 +465,12 @@ function applyEvents(events: SimEvent[]): void {
         flash = 0.6;
         shake = 6;
         log(`YOU ABSORBED THEM ALL — score ${human(state).score}`);
+        if (elLadder.checked && level < LEVELS.length - 1) {
+          levelCleared = true;
+          level += 1;
+          saveLevel(level);
+          log(`level ${level} cleared → level ${level + 1}`);
+        }
         break;
       case "spawn":
       case "separate":
@@ -497,7 +555,18 @@ canvas.addEventListener("pointerleave", () => {
   preview = null;
 });
 
+elLadder.addEventListener("change", () => updateHud());
 window.addEventListener("keydown", (ev) => {
+  if (ev.key === "[" && level > 0) {
+    level -= 1;
+    saveLevel(level);
+    startGame(randomSeed());
+  }
+  if (ev.key === "]" && level < LEVELS.length - 1) {
+    level += 1;
+    saveLevel(level);
+    startGame(randomSeed());
+  }
   if (ev.key === "r" || ev.key === "R") startGame(randomSeed());
   if (ev.key === "t" || ev.key === "T") elPanel.classList.toggle("hidden");
 });
@@ -838,7 +907,14 @@ function frame(now: number): void {
     ctx.font = "14px ui-monospace, Menlo, monospace";
     ctx.fillStyle = "rgba(150,165,200,0.9)";
     ctx.fillText(`${human(state).score} light gathered in ${state.turn} rounds`, cfg.width / 2, cfg.height / 2 + 26);
-    ctx.fillText("tap for a new universe", cfg.width / 2, cfg.height / 2 + 50);
+    const next = !elLadder.checked
+      ? "tap for a new universe"
+      : levelCleared
+        ? `level ${level} cleared · tap for level ${level + 1}`
+        : won
+          ? "you cleared the ladder · tap to play again"
+          : `tap to retry level ${level + 1}`;
+    ctx.fillText(next, cfg.width / 2, cfg.height / 2 + 50);
   }
   ctx.restore();
 

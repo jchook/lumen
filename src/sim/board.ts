@@ -118,18 +118,8 @@ export function spawnOrb(state: GameState, cfg: SimConfig): Orb | null {
 }
 
 function makePlayer(id: number, name: string, ai: boolean, x: number, y: number, cfg: SimConfig): Player {
-  return {
-    id,
-    name,
-    ai,
-    alive: true,
-    x,
-    y,
-    radius: playerRadius(cfg.startLight, cfg),
-    light: cfg.startLight,
-    score: 0,
-    speed: 1,
-  };
+  const light = ai && cfg.opponentLight > 0 ? cfg.opponentLight : cfg.startLight;
+  return { id, name, ai, alive: true, x, y, radius: playerRadius(light, cfg), light, score: 0, speed: 1 };
 }
 
 const OPPONENT_NAMES = ["Umbra", "Nyx", "Erebus", "Sable", "Dusk", "Vesper", "Nocturne", "Shade"];

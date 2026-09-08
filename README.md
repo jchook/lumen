@@ -50,6 +50,14 @@ bun run build      # static bundle in dist/
 - **The universe is finite.** Spawns fade to zero by `spawnFade` rounds. Stranded with nothing edible
   in reach is "dark". Absorb every opponent to win.
 
+## Difficulty ladder
+
+Ten levels, persisted in the browser. Early levels: one dim opponent that never hunts and starts
+with fewer lumens than you. Later: equal footing, then sharper opponents, then more of them. Win to
+advance, lose to retry. `[` and `]` jump levels; untick "ladder" in the tuning panel for free play
+with the opponent sliders. Opponent skill (`aiSkill`) controls hunting, danger judgement, dithering,
+and deterministic sloppiness.
+
 ## Why those rules
 
 Headless bot runs (`bun run bots`) drove each change:
