@@ -3,6 +3,7 @@
 Tap an orb. Your light jumps to it and absorbs it. Every collection pulls the rest of the
 universe toward that point, including the things that can eat you. Touching lights fuse.
 Travelling costs light, and the universe runs out of it. The bigger light absorbs the smaller.
+Opponents move when you move, and whoever is faster gets there first.
 
 ```bash
 bun install
@@ -22,47 +23,44 @@ bun run build      # static bundle in dist/
 
 ## Rules (current)
 
-| Orb   | Value | Fuses into |
-| ----- | ----- | ---------- |
-| spark | +1    | ember      |
-| ember | +3    | star       |
-| star  | +10   | **void**   |
+| Orb   | Worth | Fuses into | Notes                                   |
+| ----- | ----- | ---------- | --------------------------------------- |
+| mote  | +0.5  | spark      | plentiful, cheap stepping stones        |
+| spark | +1    | ember      |                                         |
+| ember | +3    | star       | shows its number                        |
+| star  | +10   | **void**   | bigger than a young light: it eats you  |
+| void  | banked| —          | swallows, grows, merges; eat it to cash |
+| gust  | +0    | —          | +speed                                  |
 
-- **The bigger light absorbs the smaller.** Anything with a larger radius than yours eats you on
-  contact, whether you tap it or gravity drags it onto you. Once you outgrow it, it is food.
-  A fresh player (10 light, r≈19) is smaller than a star (r20) and a void (r26).
-- Same kind touching → fuse. Different kinds → nudged apart.
-- A void pulls every turn, swallows what it touches, banks that light, and grows by area
-  (`voidAppetite`). Two voids merge. Eat a void and you claim everything it banked.
-- **Light is fuel and score.** You start holding 10. A tap costs `travelCost × dist/100 × radius/base`
-  lumens, so a bigger light is heavier to move. Below zero you fade. Total light ever gathered is the score.
-- Player radius = base + growth × √(light held). Anything overlapping the player is absorbed for free.
-- **The universe is finite.** Spawns fade linearly from `spawnPerTurn` to zero at `spawnFade` taps.
-  An empty field ends the run ("dark").
+- **One verb.** Tap an orb within reach. You jump there and absorb it. Every collection pulls the
+  whole board toward that point, other players included. Heavy orbs move less (inertia).
+- **The bigger light absorbs the smaller.** Any orb bigger than you eats you on contact. Players are
+  never tap targets: you absorb an opponent only by contact, and only with a clear size edge
+  (`eatMargin`, so early on you need roughly 4× their light, late game under 2×). Near-equal lights
+  bounce; exactly equal lights meeting you is a draw.
+- **Light is fuel, score and size.** Travel costs light by distance and radius. Below zero you fade.
+  Radius grows with light held. Everyone starts tiny (3 light) and on equal footing.
+- **Speed and reach.** Effective speed = gust boosts × √(base / radius). Reach = `maxJump` × speed.
+  Small fast lights are nimble; big ones lumber.
+- **Simultaneous rounds.** Everyone picks a target from the same board. Arrivals resolve by distance ÷
+  speed. First to an orb takes it; anyone else arrives late, pays the trip, and pulls up short of
+  whoever is standing there.
+- **The universe is finite.** Spawns fade to zero by `spawnFade` rounds. Stranded with nothing edible
+  in reach is "dark". Absorb every opponent to win.
 
 ## Why those rules
 
-Headless bot runs (`bun scripts/bots.ts`) showed:
+Headless bot runs (`bun run bots`) drove each change:
 
-- Gravity + fusion alone is nearly unlosable: a greedy bot survived 300 taps in 90% of runs.
-- Travel cost makes every tap a decision and kills sloppy play, but careful play stays net positive forever.
-- Fading spawns give every run an ending, but only a timer, not a loss.
-- Bigger-absorbs-smaller is what makes it losable. With defaults: random taps die in ~4; always tapping
-  the biggest orb dies in ~6 (absorbed 70%); nearest-orb play is absorbed in 44% of runs; a one-tap
-  lookahead survives 85% and scores ~127. Depth-2 and depth-3 lookahead survive 91% and 98%, so most
-  traps are one move deep and the rest reward thinking ahead.
+- Gravity + fusion alone was nearly unlosable. Travel cost made taps decisions but never ended a run.
+  Fading spawns gave an ending. Bigger-absorbs-smaller made it losable.
+- Tappable opponents made every game a 2-round coin flip: whoever was one light bigger jumped on the
+  other. Contact-only absorption, reach limits, an eat margin, and simultaneous arrival fixed that.
+- With defaults and one opponent: random play dies in ~4 rounds; a one-round-lookahead bot wins ~75%
+  in ~5 rounds, but it can see the opponent's move (the preview cheat), so humans will be slower.
 
-`bun scripts/grade.ts [seeds]` grades fixed boards (spawning off) as levels: solvable, trap depth
+`bun run grade [seeds]` grades fixed boards (spawning off) as levels: solvable, trap depth
 (lookahead needed to survive), safe-tap fraction along the winning line, and score.
-
-Fusing before collecting is worth more than collecting (two sparks = 2, one ember = 3) and pulled-in
-orbs cost no travel, so skilled play is engineering fusions and chain pulls, not just hopping to the nearest orb.
-
-## Attraction rule
-
-`pull = min(strength × mass / (1 + dist / falloff), maxTravel, dist)` toward the collection point,
-plus `drift × last displacement` as momentum. Voids add their own pull. All three constants are
-sliders in the panel; config persists in localStorage and "copy config" dumps it as JSON.
 
 ## Roadmap
 

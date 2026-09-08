@@ -12,14 +12,14 @@
  *     `trap depth` moves. Low = narrow path.
  *   - score: light gathered on that line.
  */
-import { defaultConfig, newGame, step, type GameState, type SimConfig } from "../src/sim";
+import { defaultConfig, edibleTargets, human, newGame, round, type GameState, type SimConfig } from "../src/sim";
 
-const cfg: SimConfig = { ...defaultConfig, spawnPerTurn: 0, spawnFade: 0, initialOrbs: 16 };
+const cfg: SimConfig = { ...defaultConfig, spawnPerTurn: 0, spawnFade: 0, initialOrbs: 16, opponents: Number(process.env.OPPONENTS ?? 1) };
 const MAX_DEPTH = 4;
 const DEAD = -1e9;
 
-const edible = (s: GameState) => s.orbs.filter((o) => o.radius <= s.player.radius);
-const isDeath = (r: ReturnType<typeof step>) =>
+const edible = (s: GameState) => edibleTargets(s, human(s).id, cfg);
+const isDeath = (r: ReturnType<typeof round>) =>
   r.state.status === "over" && r.events.some((e) => e.type === "blackout" && e.reason !== "dark");
 
 /** Best achievable light delta within `depth` taps, or DEAD if every line dies. */
@@ -27,9 +27,9 @@ function value(s: GameState, depth: number): number {
   if (s.status !== "playing" || depth === 0) return 0;
   let best = DEAD;
   for (const o of edible(s)) {
-    const r = step(s, o.id, cfg);
+    const r = round(s, o.id, cfg);
     if (isDeath(r)) continue;
-    const v = r.state.light - s.light + value(r.state, depth - 1);
+    const v = human(r.state).light - human(s).light + value(r.state, depth - 1);
     if (v > best) best = v;
   }
   return best;
@@ -40,27 +40,28 @@ function playLine(seed: number, depth: number): { survived: boolean; score: numb
   let safeSum = 0;
   let moves = 0;
   while (s.status === "playing") {
+    if (s.status !== "playing") break;
     const options = edible(s);
     let bestId = -1;
     let best = DEAD;
     let safe = 0;
     for (const o of options) {
-      const r = step(s, o.id, cfg);
-      const v = isDeath(r) ? DEAD : r.state.light - s.light + value(r.state, depth - 1);
+      const r = round(s, o.id, cfg);
+      const v = isDeath(r) ? DEAD : human(r.state).light - human(s).light + value(r.state, depth - 1);
       if (v > DEAD / 2) safe++;
       if (v > best) {
         best = v;
         bestId = o.id;
       }
     }
-    if (bestId < 0) return { survived: false, score: s.score, safe: safeSum / Math.max(1, moves), moves };
+    if (bestId < 0) return { survived: false, score: human(s).score, safe: safeSum / Math.max(1, moves), moves };
     safeSum += safe / options.length;
     moves++;
-    const r = step(s, bestId, cfg);
-    if (isDeath(r)) return { survived: false, score: r.state.score, safe: safeSum / moves, moves };
+    const r = round(s, bestId, cfg);
+    if (isDeath(r)) return { survived: false, score: human(r.state).score, safe: safeSum / moves, moves };
     s = r.state;
   }
-  return { survived: true, score: s.score, safe: safeSum / Math.max(1, moves), moves };
+  return { survived: true, score: human(s).score, safe: safeSum / Math.max(1, moves), moves };
 }
 
 const seeds = process.argv.slice(2).map(Number).filter((n) => Number.isFinite(n));

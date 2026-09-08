@@ -1,22 +1,27 @@
 import {
+  GUST,
   ORB,
   VOID,
   defaultConfig,
+  effectiveSpeed,
+  human,
   newGame,
   randomSeed,
+  reach,
+  round,
   spawnRate,
-  step,
   type GameState,
   type Orb,
   type OrbKind,
+  type Player,
+  type RoundResult,
   type SimConfig,
   type SimEvent,
-  type StepResult,
 } from "../sim";
 
 // ---------- config + persistence ----------
 
-const STORAGE_KEY = "lumen.config.v1";
+const STORAGE_KEY = "lumen.config.v3";
 
 function loadConfig(): SimConfig {
   try {
@@ -43,14 +48,21 @@ interface SliderSpec {
 }
 
 const SLIDERS: SliderSpec[] = [
+  { key: "opponents", min: 0, max: 6, step: 1, label: "opponents (new board)" },
+  { key: "maxJump", min: 0, max: 800, step: 10, label: "reach at base size px (0=∞)" },
+  { key: "gustChance", min: 0, max: 0.5, step: 0.01, label: "gust chance" },
+  { key: "gustBoost", min: 0, max: 1, step: 0.05, label: "gust speed boost" },
   { key: "strength", min: 0, max: 300, step: 1, label: "strength (px at 0)" },
   { key: "falloff", min: 20, max: 800, step: 5, label: "falloff (half-pull dist)" },
   { key: "maxTravel", min: 10, max: 400, step: 5, label: "max travel" },
   { key: "drift", min: 0, max: 1, step: 0.01, label: "drift (momentum)" },
+  { key: "inertia", min: 0, max: 1.5, step: 0.05, label: "inertia (heavy orbs move less)" },
+  { key: "eatMargin", min: 0, max: 0.5, step: 0.01, label: "eat margin (size edge to absorb)" },
+  { key: "playerDrag", min: 0, max: 1, step: 0.05, label: "player drag" },
   { key: "playerPull", min: 0, max: 3, step: 0.05, label: "player pull / 10px" },
   { key: "voidPull", min: 0, max: 3, step: 0.05, label: "void pull" },
-  { key: "spawnPerTurn", min: 0, max: 5, step: 0.25, label: "spawn per tap (at start)" },
-  { key: "spawnFade", min: 0, max: 200, step: 5, label: "spawn fades out by tap (0=never)" },
+  { key: "spawnPerTurn", min: 0, max: 5, step: 0.25, label: "spawn per round (at start)" },
+  { key: "spawnFade", min: 0, max: 200, step: 5, label: "spawn fades out by round (0=never)" },
   { key: "initialOrbs", min: 4, max: 40, step: 1, label: "initial orbs (new board)" },
   { key: "playerGrowth", min: 0, max: 5, step: 0.1, label: "player growth" },
   { key: "travelCost", min: 0, max: 5, step: 0.05, label: "travel cost / 100px" },
@@ -68,6 +80,7 @@ const elLight = $("light");
 const elTurn = $("turn");
 const elOrbs = $("orbs");
 const elSeed = $("seed");
+const elRivals = $("rivals");
 const elHint = $("hint");
 const elPanel = $("panel");
 const elLog = $("log");
@@ -129,6 +142,11 @@ interface Sprite {
   stored: number;
   /** Per-sprite phase for idle breathing. */
   phase: number;
+  /** Players only. */
+  name: string;
+  light: number;
+  ai: boolean;
+  speed: number;
 }
 
 interface Particle {
@@ -140,17 +158,32 @@ interface Particle {
   max: number;
   size: number;
   color: string;
-  /** Optional homing target (the player). */
-  home: boolean;
+  /** Player id to home toward, or null. */
+  home: number | null;
 }
 
 const COLOR: Record<OrbKind, { core: string; glow: string }> = {
+  0: { core: "#c9d6ee", glow: "120,150,210" },
   1: { core: "#e4f0ff", glow: "140,190,255" },
   2: { core: "#ffd28a", glow: "255,170,70" },
   3: { core: "#fff4fb", glow: "255,120,220" },
   4: { core: "#0a0612", glow: "120,60,200" },
+  5: { core: "#eafff0", glow: "110,255,160" },
 };
-const PLAYER = { core: "#f2fbff", glow: "120,230,255" };
+const HUMAN = { core: "#f2fbff", glow: "120,230,255" };
+const RIVALS = [
+  { core: "#fff0f6", glow: "255,110,170" },
+  { core: "#f0fff4", glow: "120,255,170" },
+  { core: "#fff8ec", glow: "255,200,90" },
+  { core: "#f6f0ff", glow: "190,140,255" },
+  { core: "#fffbe8", glow: "240,240,120" },
+  { core: "#eefaff", glow: "90,200,230" },
+];
+
+function playerColor(p: { id: number; ai: boolean }): { core: string; glow: string } {
+  if (!p.ai) return HUMAN;
+  return RIVALS[(-p.id - 2) % RIVALS.length]!;
+}
 
 const SPRING_K = 150;
 const SPRING_ZETA = 0.5; // < 1 → overshoot
@@ -159,15 +192,15 @@ const SPRING_C = 2 * Math.sqrt(SPRING_K) * SPRING_ZETA;
 let state: GameState;
 let seed = randomSeed();
 const sprites = new Map<number, Sprite>();
-let player: Sprite;
+const players = new Map<number, Sprite>();
 const particles: Particle[] = [];
 let shake = 0;
 let flash = 0;
 let endReason = "";
+let endBy = "";
 let hoverId: number | null = null;
-let preview: StepResult | null = null;
+let preview: RoundResult | null = null;
 let previewDirty = true;
-let pointerWorld: { x: number; y: number } | null = null;
 let tapped = false;
 
 function makeSprite(o: Orb, fresh: boolean): Sprite {
@@ -189,7 +222,22 @@ function makeSprite(o: Orb, fresh: boolean): Sprite {
     swallowed: o.swallowed,
     stored: o.stored,
     phase: Math.random() * Math.PI * 2,
+    name: "",
+    light: 0,
+    ai: false,
+    speed: 1,
   };
+}
+
+function makePlayerSprite(p: Player): Sprite {
+  const s = makeSprite({ id: p.id, kind: 1, radius: p.radius, x: p.x, y: p.y, dx: 0, dy: 0, swallowed: 0, stored: 0 }, false);
+  s.speed = p.speed;
+  s.name = p.name;
+  s.light = p.light;
+  s.ai = p.ai;
+  s.tscale = p.radius / cfg.playerBaseRadius;
+  s.scale = s.tscale;
+  return s;
 }
 
 function syncSprites(fresh: boolean): void {
@@ -210,21 +258,30 @@ function syncSprites(fresh: boolean): void {
     s.dying = false;
   }
   for (const s of sprites.values()) if (!seen.has(s.id)) s.dying = true;
-  player.tx = state.player.x;
-  player.ty = state.player.y;
-  player.tscale = state.player.radius / cfg.playerBaseRadius;
+  for (const p of state.players) {
+    let s = players.get(p.id);
+    if (!s) {
+      s = makePlayerSprite(p);
+      players.set(p.id, s);
+    }
+    s.tx = p.x;
+    s.ty = p.y;
+    s.radius = p.radius;
+    s.light = p.light;
+    s.speed = p.speed;
+    s.tscale = p.radius / cfg.playerBaseRadius;
+    s.dying = !p.alive;
+  }
 }
 
 function startGame(newSeed: number): void {
   seed = newSeed;
   state = newGame(seed, cfg);
   sprites.clear();
+  players.clear();
   particles.length = 0;
-  player = makeSprite(
-    { id: 0, kind: 1, radius: cfg.playerBaseRadius, x: state.player.x, y: state.player.y, dx: 0, dy: 0, swallowed: 0, stored: 0 },
-    false,
-  );
-  player.tscale = 1;
+  endReason = "";
+  endBy = "";
   syncSprites(true);
   // Snap everything into place on a new board.
   for (const s of sprites.values()) {
@@ -234,22 +291,32 @@ function startGame(newSeed: number): void {
   previewDirty = true;
   hoverId = null;
   updateHud();
-  log(`— new board, seed ${seed}`);
+  log(`— new universe, seed ${seed}, ${cfg.opponents} opponent${cfg.opponents === 1 ? "" : "s"}`);
 }
 
 function updateHud(): void {
-  elLight.textContent = String(Math.max(0, Math.round(state.light)));
-  elScore.textContent = `score ${state.score}`;
-  elTurn.textContent = `turn ${state.turn}`;
+  const me = human(state);
+  elLight.textContent = String(Math.max(0, Math.round(me.light)));
+  elScore.textContent = `score ${me.score}`;
+  elTurn.textContent = `round ${state.turn} · speed ${effectiveSpeed(me, cfg).toFixed(2)}`;
   const rate = spawnRate(state.turn, cfg);
-  elOrbs.textContent = `${state.orbs.length} orbs · ${rate > 0 ? `+${rate.toFixed(1)}/tap` : "no more light"}`;
+  elOrbs.textContent = `${state.orbs.length} orbs · ${rate > 0 ? `+${rate.toFixed(1)}/round` : "no more light"}`;
   elSeed.textContent = String(seed);
+  const rivals = state.players.filter((p) => p.ai);
+  elRivals.replaceChildren();
+  for (const p of rivals) {
+    const span = document.createElement("span");
+    span.textContent = p.alive ? `${p.name} ${Math.max(0, Math.round(p.light))}` : `${p.name} ✕`;
+    span.style.color = p.alive ? `rgb(${playerColor(p).glow})` : "";
+    span.style.opacity = p.alive ? "0.9" : "0.4";
+    span.style.marginRight = "12px";
+    elRivals.append(span);
+  }
 }
 
 // ---------- effects ----------
 
-function burst(x: number, y: number, kind: OrbKind, count: number, home: boolean): void {
-  const c = COLOR[kind].glow;
+function burst(x: number, y: number, glow: string, count: number, home: number | null): void {
   for (let i = 0; i < count; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 60 + Math.random() * 220;
@@ -261,25 +328,31 @@ function burst(x: number, y: number, kind: OrbKind, count: number, home: boolean
       life: 0,
       max: 0.5 + Math.random() * 0.6,
       size: 1.5 + Math.random() * 2.5,
-      color: c,
+      color: glow,
       home,
     });
   }
 }
 
+const who = (id: number): string => state.players.find((p) => p.id === id)?.name ?? "?";
+
 function applyEvents(events: SimEvent[]): void {
+  const me = human(state).id;
   for (const e of events) {
     switch (e.type) {
       case "travel":
-        if (e.cost > 0) log(`−${e.cost.toFixed(1)} light for ${Math.round(e.dist)}px`);
+        if (e.actor === me && e.cost > 0) log(`−${e.cost.toFixed(1)} light for ${Math.round(e.dist)}px`);
         break;
-      case "collect":
-        burst(e.orb.x, e.orb.y, e.orb.kind, e.by === "tap" ? 18 : 10, true);
-        player.vscale += 1.2;
-        log(`+${e.value} ${ORB[e.orb.kind].name}${e.by === "overlap" ? " (pulled in)" : ""}`);
+      case "collect": {
+        burst(e.orb.x, e.orb.y, COLOR[e.orb.kind].glow, e.by === "tap" ? 18 : 10, e.actor);
+        const s = players.get(e.actor);
+        if (s) s.vscale += 1.2;
+        if (e.actor === me) log(`+${e.value} ${ORB[e.orb.kind].name}${e.by === "overlap" ? " (pulled in)" : ""}`);
+        else log(`${who(e.actor)} took a ${ORB[e.orb.kind].name}`);
         break;
+      }
       case "fuse": {
-        burst(e.result.x, e.result.y, e.result.kind, 26, false);
+        burst(e.result.x, e.result.y, COLOR[e.result.kind].glow, 26, null);
         shake = Math.max(shake, e.result.kind === VOID ? 10 : 4);
         log(`${ORB[e.a.kind].name} + ${ORB[e.b.kind].name} → ${ORB[e.result.kind].name}`);
         const s = sprites.get(e.result.id);
@@ -292,25 +365,56 @@ function applyEvents(events: SimEvent[]): void {
         break;
       }
       case "swallow":
-        burst(e.orb.x, e.orb.y, e.orb.kind, 12, false);
+        burst(e.orb.x, e.orb.y, COLOR[e.orb.kind].glow, 12, null);
         shake = Math.max(shake, 3);
         log(`void swallowed a ${ORB[e.orb.kind].name} (holds ${e.void_.stored}, r${e.void_.radius.toFixed(0)})`);
         break;
       case "merge":
-        burst(e.result.x, e.result.y, VOID, 30, false);
+        burst(e.result.x, e.result.y, COLOR[VOID].glow, 30, null);
         shake = Math.max(shake, 8);
         log(`two voids merged (holds ${e.result.stored}, r${e.result.radius.toFixed(0)})`);
         break;
-      case "spawn":
+      case "eat": {
+        burst(e.prey.x, e.prey.y, playerColor(e.prey).glow, 40, e.predator.id);
+        shake = Math.max(shake, 12);
+        const s = players.get(e.predator.id);
+        if (s) s.vscale += 2.5;
+        log(`${who(e.predator.id)} absorbed ${who(e.prey.id)} (+${e.value.toFixed(0)})`);
         break;
-      case "separate":
+      }
+      case "eliminate":
+        if (e.player.ai && e.reason !== "eaten") log(`${e.player.name} ${e.reason}`);
+        break;
+      case "miss": {
+        burst(e.at.x, e.at.y, "150,150,170", 8, null);
+        log(e.actor === me ? "too slow — it was already taken" : `${who(e.actor)} arrived too late`);
+        break;
+      }
+      case "boost":
+        log(`${e.actor === me ? "speed" : `${who(e.actor)} speed`} → ${e.speed.toFixed(2)}`);
+        break;
+      case "draw":
+        endReason = "draw";
+        flash = 0.5;
+        shake = 6;
+        log(`DRAW — ${e.a.name} and ${e.b.name} met as equals`);
         break;
       case "blackout":
         endReason = e.reason;
-        shake = e.reason === "absorbed" ? 16 : 4;
-        flash = e.reason === "absorbed" ? 1 : 0.3;
-        burst(e.at.x, e.at.y, e.by?.kind ?? VOID, 60, false);
-        log(`${e.reason.toUpperCase()}${e.by ? ` by a ${ORB[e.by.kind].name} (r${e.by.radius.toFixed(0)})` : ""} — score ${state.score}`);
+        endBy = e.byPlayer ? e.byPlayer.name : e.by ? `a ${ORB[e.by.kind].name}` : "";
+        shake = e.reason === "absorbed" || e.reason === "eaten" ? 16 : 4;
+        flash = e.reason === "absorbed" || e.reason === "eaten" ? 1 : 0.3;
+        burst(e.at.x, e.at.y, e.byPlayer ? playerColor(e.byPlayer).glow : COLOR[e.by?.kind ?? VOID].glow, 60, null);
+        log(`${e.reason.toUpperCase()}${endBy ? ` by ${endBy}` : ""} — score ${human(state).score}`);
+        break;
+      case "win":
+        endReason = "won";
+        flash = 0.6;
+        shake = 6;
+        log(`YOU ABSORBED THEM ALL — score ${human(state).score}`);
+        break;
+      case "spawn":
+      case "separate":
         break;
     }
   }
@@ -337,7 +441,8 @@ function toWorld(clientX: number, clientY: number): { x: number; y: number } {
   return { x: (clientX - view.ox) / view.scale, y: (clientY - view.oy) / view.scale };
 }
 
-function orbAt(p: { x: number; y: number }): Orb | null {
+/** Nearest orb under the pointer. Players are absorbed by contact, never tapped. */
+function targetAt(p: { x: number; y: number }): Orb | null {
   let best: Orb | null = null;
   let bestD = Infinity;
   for (const o of state.orbs) {
@@ -350,11 +455,12 @@ function orbAt(p: { x: number; y: number }): Orb | null {
   return best;
 }
 
-function tap(orb: Orb): void {
-  const result = step(state, orb.id, cfg);
+function tap(id: number): void {
+  const result = round(state, id, cfg);
+  if (result.state === state) return;
   state = result.state;
   syncSprites(true);
-  applyEvents(result.events);
+  for (const t of result.turns) applyEvents(t.events);
   updateHud();
   previewDirty = true;
   if (!tapped) {
@@ -364,18 +470,17 @@ function tap(orb: Orb): void {
 }
 
 canvas.addEventListener("pointerdown", (ev) => {
-  if (state.status === "over") {
+  if (state.status !== "playing") {
     startGame(randomSeed());
     return;
   }
-  const orb = orbAt(toWorld(ev.clientX, ev.clientY));
-  if (orb) tap(orb);
+  const t = targetAt(toWorld(ev.clientX, ev.clientY));
+  if (t) tap(t.id);
 });
 
 canvas.addEventListener("pointermove", (ev) => {
-  pointerWorld = toWorld(ev.clientX, ev.clientY);
-  const orb = orbAt(pointerWorld);
-  const id = orb ? orb.id : null;
+  const t = targetAt(toWorld(ev.clientX, ev.clientY));
+  const id = t ? t.id : null;
   if (id !== hoverId) {
     hoverId = id;
     previewDirty = true;
@@ -383,7 +488,6 @@ canvas.addEventListener("pointermove", (ev) => {
 });
 
 canvas.addEventListener("pointerleave", () => {
-  pointerWorld = null;
   hoverId = null;
   preview = null;
 });
@@ -473,21 +577,48 @@ function drawVoid(x: number, y: number, r: number, stored: number, alpha: number
   ctx.globalAlpha = 1;
 }
 
+function threatRing(x: number, y: number, r: number, t: number, phase: number): void {
+  ctx.strokeStyle = `rgba(255,70,100,${0.55 + 0.3 * Math.sin(t * 5 + phase)})`;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.arc(x, y, r + 6, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
 function drawOrb(s: Sprite, t: number, threat: boolean): void {
   const r = s.radius * s.scale * (1 + 0.03 * Math.sin(t * 2 + s.phase));
   if (r <= 0.1) return;
   if (s.kind === VOID) drawVoid(s.x, s.y, r, s.stored, s.alpha, t);
-  else glowCircle(s.x, s.y, r, COLOR[s.kind].core, COLOR[s.kind].glow, s.alpha, s.kind === 3 ? 4 : 3);
-  if (threat && !s.dying) {
-    // Bigger than you: it eats you. Pulsing red ring.
-    ctx.strokeStyle = `rgba(255,70,100,${0.55 + 0.3 * Math.sin(t * 5 + s.phase)})`;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, r + 6, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
+  else glowCircle(s.x, s.y, r, COLOR[s.kind].core, COLOR[s.kind].glow, s.alpha, s.kind === 3 ? 4 : s.kind === 0 ? 2.2 : 3);
+  // Worth, written on anything big enough to carry a number. Gusts get a speed glyph.
+  const value = ORB[s.kind].value;
+  if (s.kind === GUST || (value >= 3 && s.kind !== VOID)) {
+    ctx.font = `bold ${Math.max(9, r * 0.9)}px ui-monospace, Menlo, monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = s.kind === GUST ? "rgba(20,60,35,0.9)" : "rgba(40,30,20,0.85)";
+    ctx.globalAlpha = s.alpha;
+    ctx.fillText(s.kind === GUST ? "»" : String(value), s.x, s.y + 0.5);
+    ctx.globalAlpha = 1;
+    ctx.textBaseline = "alphabetic";
   }
+  if (threat && !s.dying) threatRing(s.x, s.y, r, t, s.phase);
+}
+
+function drawPlayer(s: Sprite, t: number, threat: boolean): void {
+  const r = cfg.playerBaseRadius * s.scale;
+  if (r <= 0.1) return;
+  const c = playerColor(s);
+  glowCircle(s.x, s.y, r, c.core, c.glow, s.alpha, 3.5);
+  if (!s.dying) {
+    ctx.font = "11px ui-monospace, Menlo, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = `rgba(${c.glow},0.85)`;
+    ctx.fillText(s.ai ? `${s.name} ${Math.max(0, Math.round(s.light))}` : `${Math.max(0, Math.round(s.light))}`, s.x, s.y + r + 14);
+  }
+  if (threat && !s.dying) threatRing(s.x, s.y, r, t, s.phase);
 }
 
 function drawPreview(): void {
@@ -499,7 +630,6 @@ function drawPreview(): void {
   ctx.lineWidth = 1;
   for (const o of next.orbs) {
     const b = before.get(o.id);
-    const r = o.radius;
     if (b && (Math.abs(b.x - o.x) > 0.5 || Math.abs(b.y - o.y) > 0.5)) {
       ctx.strokeStyle = "rgba(160,190,255,0.25)";
       ctx.beginPath();
@@ -509,11 +639,20 @@ function drawPreview(): void {
     }
     ctx.strokeStyle = b ? `rgba(${COLOR[o.kind].glow},0.45)` : "rgba(255,255,255,0.15)";
     ctx.beginPath();
-    ctx.arc(o.x, o.y, r, 0, Math.PI * 2);
+    ctx.arc(o.x, o.y, o.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Where every player ends up, including opponents' replies.
+  for (const p of next.players) {
+    if (!p.alive) continue;
+    const c = playerColor(p);
+    ctx.strokeStyle = `rgba(${c.glow},0.5)`;
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
     ctx.stroke();
   }
   ctx.setLineDash([]);
-  // Highlight consequences.
   for (const e of preview.events) {
     if (e.type === "fuse") {
       ctx.strokeStyle = e.result.kind === VOID ? "rgba(255,80,120,0.9)" : `rgba(${COLOR[e.result.kind].glow},0.9)`;
@@ -527,7 +666,7 @@ function drawPreview(): void {
       ctx.beginPath();
       ctx.arc(e.at.x, e.at.y, 40, 0, Math.PI * 2);
       ctx.stroke();
-    } else if (e.type === "collect" && e.by === "overlap") {
+    } else if (e.type === "collect" && e.by === "overlap" && e.actor === human(state).id) {
       ctx.strokeStyle = "rgba(120,230,255,0.8)";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -535,25 +674,17 @@ function drawPreview(): void {
       ctx.stroke();
     }
   }
-  // Predicted gain, near the tapped orb.
-  const tappedOrb = state.orbs.find((o) => o.id === hoverId);
-  if (tappedOrb) {
-    const net = next.light - state.light;
-    const blackout = preview.events.some((e) => e.type === "blackout" && e.reason === "absorbed");
-    const faded = preview.events.some((e) => e.type === "blackout" && e.reason === "faded");
+  const target = hoverId === null ? null : state.orbs.find((o) => o.id === hoverId);
+  if (target) {
+    const net = human(next).light - human(state).light;
+    const dead = preview.events.some((e) => (e.type === "blackout" && e.reason !== "dark") || e.type === "draw");
+    const won = preview.events.some((e) => e.type === "win");
+    const missed = preview.events.some((e) => e.type === "miss" && e.actor === human(state).id);
     ctx.font = "13px ui-monospace, Menlo, monospace";
     ctx.textAlign = "center";
-    ctx.fillStyle = blackout || faded ? "rgba(255,80,110,1)" : net < 0 ? "rgba(255,170,120,0.95)" : "rgba(220,235,255,0.9)";
-    const label = blackout ? "ABSORBED" : faded ? "FADE" : `${net >= 0 ? "+" : "−"}${Math.abs(net).toFixed(1)}`;
-    ctx.fillText(label, tappedOrb.x, tappedOrb.y - tappedOrb.radius - 12);
-    // Player ghost.
-    ctx.strokeStyle = "rgba(120,230,255,0.5)";
-    ctx.setLineDash([2, 4]);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(next.player.x, next.player.y, next.player.radius, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.fillStyle = dead ? "rgba(255,80,110,1)" : won ? "rgba(120,255,170,1)" : net < 0 ? "rgba(255,170,120,0.95)" : "rgba(220,235,255,0.9)";
+    const label = dead ? "DEATH" : won ? "WIN" : missed ? "TOO SLOW" : `${net >= 0 ? "+" : "−"}${Math.abs(net).toFixed(1)}`;
+    ctx.fillText(label, target.x, target.y - target.radius - 12);
   }
   ctx.restore();
 }
@@ -588,7 +719,7 @@ function frame(now: number): void {
 
   if (previewDirty) {
     previewDirty = false;
-    preview = hoverId !== null && state.status === "playing" ? step(state, hoverId, cfg) : null;
+    preview = hoverId !== null && state.status === "playing" ? round(state, hoverId, cfg) : null;
   }
 
   // Integrate.
@@ -596,7 +727,7 @@ function frame(now: number): void {
     springTo(s, dt, springs);
     if (s.dying && s.scale < 0.03 && Math.abs(s.vscale) < 0.5) sprites.delete(s.id);
   }
-  springTo(player, dt, springs);
+  for (const s of players.values()) springTo(s, dt, springs);
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i]!;
     p.life += dt;
@@ -604,12 +735,11 @@ function frame(now: number): void {
       particles.splice(i, 1);
       continue;
     }
-    if (p.home) {
+    const homeSprite = p.home === null ? undefined : players.get(p.home);
+    if (homeSprite) {
       const k = p.life / p.max;
-      const dx = player.x - p.x;
-      const dy = player.y - p.y;
-      p.vx += dx * 18 * k * dt * 10;
-      p.vy += dy * 18 * k * dt * 10;
+      p.vx += (homeSprite.x - p.x) * 180 * k * dt;
+      p.vy += (homeSprite.y - p.y) * 180 * k * dt;
     }
     p.vx *= 1 - 2.5 * dt;
     p.vy *= 1 - 2.5 * dt;
@@ -627,18 +757,39 @@ function frame(now: number): void {
   ctx.translate(view.ox + sx, view.oy + sy);
   ctx.scale(view.scale, view.scale);
 
-  // Board edge.
   ctx.strokeStyle = "rgba(90,110,160,0.18)";
   ctx.lineWidth = 1;
   ctx.strokeRect(0.5, 0.5, cfg.width - 1, cfg.height - 1);
 
   ctx.globalCompositeOperation = "lighter";
   drawPreview();
-  for (const s of sprites.values()) drawOrb(s, t, s.radius > state.player.radius);
-
-  // Player.
-  const pr = cfg.playerBaseRadius * player.scale;
-  glowCircle(player.x, player.y, pr, PLAYER.core, PLAYER.glow, 1, 3.5);
+  const meNow = human(state);
+  const myR = meNow.radius;
+  const myReach = reach(meNow, cfg);
+  for (const s of sprites.values()) {
+    const far = Math.hypot(s.tx - meNow.x, s.ty - meNow.y) > myReach;
+    s.alpha = far ? 0.45 : 1;
+    drawOrb(s, t, s.radius > myR);
+  }
+  for (const s of players.values()) if (s.ai) drawPlayer(s, t, s.radius > myR);
+  const me = players.get(human(state).id);
+  if (me) drawPlayer(me, t, false);
+  if (cfg.maxJump > 0 && state.status === "playing") {
+    // Your reach, and the reach of anything that can eat you.
+    for (const p of state.players) {
+      if (!p.alive) continue;
+      const mine = !p.ai;
+      if (!mine && p.radius <= human(state).radius) continue;
+      const c = playerColor(p);
+      ctx.strokeStyle = `rgba(${c.glow},${mine ? 0.14 : 0.1})`;
+      ctx.lineWidth = 1;
+      ctx.setLineDash(mine ? [] : [6, 6]);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, reach(p, cfg) + p.radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
 
   for (const p of particles) {
     const a = 1 - p.life / p.max;
@@ -649,17 +800,29 @@ function frame(now: number): void {
   }
   ctx.globalCompositeOperation = "source-over";
 
-  if (state.status === "over") {
+  if (state.status !== "playing") {
+    const won = state.status === "won";
+    const drawn = state.status === "draw";
     ctx.fillStyle = `rgba(4,3,10,${0.55 + 0.4 * flash})`;
     ctx.fillRect(0, 0, cfg.width, cfg.height);
     ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(230,235,255,0.95)";
-    ctx.font = `300 ${endReason === "dark" ? 40 : 54}px ui-monospace, Menlo, monospace`;
-    const title = endReason === "faded" ? "faded" : endReason === "dark" ? "the universe went dark" : "absorbed";
+    ctx.fillStyle = won ? "rgba(200,255,220,0.95)" : "rgba(230,235,255,0.95)";
+    const title = won
+      ? "you absorbed them all"
+      : drawn
+        ? "a draw"
+        : endReason === "faded"
+        ? "faded"
+        : endReason === "dark"
+          ? "the universe went dark"
+          : endReason === "eaten"
+            ? `absorbed by ${endBy}`
+            : "absorbed";
+    ctx.font = `300 ${title.length > 12 ? 40 : 54}px ui-monospace, Menlo, monospace`;
     ctx.fillText(title, cfg.width / 2, cfg.height / 2 - 10);
     ctx.font = "14px ui-monospace, Menlo, monospace";
     ctx.fillStyle = "rgba(150,165,200,0.9)";
-    ctx.fillText(`${state.score} light gathered in ${state.turn} taps`, cfg.width / 2, cfg.height / 2 + 26);
+    ctx.fillText(`${human(state).score} light gathered in ${state.turn} rounds`, cfg.width / 2, cfg.height / 2 + 26);
     ctx.fillText("tap for a new universe", cfg.width / 2, cfg.height / 2 + 50);
   }
   ctx.restore();
