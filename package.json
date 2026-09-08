@@ -1,0 +1,21 @@
+{
+  "name": "orbgame",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts",
+    "test": "bun test",
+    "build": "bun build src/web/index.html --outdir dist --minify",
+    "typecheck": "tsc --noEmit",
+    "bots": "bun scripts/bots.ts",
+    "grade": "bun scripts/grade.ts"
+  }
+}

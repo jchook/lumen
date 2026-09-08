@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>LUMEN</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="hud">
+      <div class="score"><span id="light">0</span></div>
+      <div class="meta"><span id="score">score 0</span> · <span id="turn">turn 0</span> · <span id="orbs">0 orbs</span> · seed <span id="seed">0</span></div>
+      <div class="meta keys">R new universe · T tuning</div>
+    </div>
+    <div id="hint">collect the light</div>
+    <aside id="panel" class="hidden">
+      <header>
+        <strong>tuning</strong>
+        <button id="toggle" title="hide panel (T)">×</button>
+      </header>
+      <div id="sliders"></div>
+      <div class="row">
+        <button id="newboard">new board (R)</button>
+        <button id="replay" title="same seed">replay seed</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="preview" /> hover preview (cheat)</label>
+        <label><input type="checkbox" id="springs" checked /> springs</label>
+      </div>
+      <div class="row">
+        <button id="copy">copy config</button>
+        <button id="reset">reset defaults</button>
+      </div>
+      <pre id="log"></pre>
+    </aside>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
