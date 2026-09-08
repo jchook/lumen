@@ -124,3 +124,34 @@ Headless bot runs (`bun run bots`) drove each change:
 2. ✅ Canvas2D debug view with sliders and hover preview. **Tune here until tapping is irresistible.**
 3. WebGL renderer: bloom (half-res blur), fresnel rim, parallax starfield, radial distortion near voids.
 4. Web Audio: rising pitch on chains, low thump on fusion.
+
+## v3 — realtime orbital absorption (current, served at `/`)
+
+The turn-based versions are tagged `v0.2-turnbased` and still served at `/v2` and `/v1`.
+
+**Rules.** A torus arena with a few suns. Every body carries lumens (its mass); radius is √mass so
+area is mass. Bodies above `gravityMass` bend space: everything else falls toward them with
+softened Newtonian gravity and keeps its momentum, so orbs and lights orbit. You move by burning:
+click or hold toward where you want to go. The light throws a fraction of its mass out the back as a
+new orb and recoils the other way. Farther from your light is a stronger burn and a bigger cost. When
+two bodies overlap, lumens flow from the lighter into the heavier at a rate set by the overlap;
+equal masses trade nothing. A body that runs dry is gone. Suns radiate back what they eat as slow
+orbs, so the arena never empties. Last light burning wins.
+
+**Why those rules.** Burns eject real mass so thrust is conservative: every escape leaves food
+behind for the chaser, and moving is visibly expensive. Gravity only from heavy bodies keeps orbits
+Keplerian instead of chaotic. Gradual absorption turns grazes into losses instead of deaths. The
+torus removes walls and corners. Difficulty is company: more rivals share the arena.
+
+**Reading the screen.** The dotted line is your free-fall path for the next four seconds. A red ring
+marks a light that outweighs you. Chevrons at the screen edge point to heavier things off screen,
+larger when closer. The camera zooms out as you grow and to keep the nearest threat on screen.
+
+**Bots.** `src/sim3/bots.ts`: escape a predicted graze with a heavier body by burning prograde,
+chase a lighter body only when its mass beats the burns needed to intercept it along both predicted
+paths, and commit to a target until it is eaten or has cost more than it is worth.
+
+```sh
+bun run arena       # bot-only balance sweep
+bun scripts/trace.ts 3   # one game, masses every ten seconds
+```

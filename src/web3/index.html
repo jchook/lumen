@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>LUMEN</title>
+    <link rel="stylesheet" href="./style.css" />
+    <style>
+      #game { cursor: none; }
+      #hud .rank { display: flex; gap: 14px; align-items: baseline; margin-top: 4px; font-size: 12px; color: var(--dim); letter-spacing: 0.08em; }
+      #hud .rank b { font-weight: 400; }
+      #end { position: fixed; inset: 0; display: none; place-items: center; text-align: center; pointer-events: none; }
+      #end.on { display: grid; }
+      #end .title { font-size: 34px; font-weight: 300; letter-spacing: 0.3em; text-shadow: 0 0 24px rgba(160, 200, 255, 0.6); }
+      #end .sub { margin-top: 10px; font-size: 13px; letter-spacing: 0.25em; color: var(--dim); }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="hud">
+      <div class="score"><span id="light">0</span></div>
+      <div class="rank" id="rank"></div>
+      <div class="meta" id="level"></div>
+      <div class="meta keys">click or hold to burn · farther = harder · R new game · [ ] rivals · T tuning</div>
+    </div>
+    <div id="hint">burn to move · heavier absorbs lighter · stay out of the suns</div>
+    <div id="end"><div><div class="title" id="endtitle"></div><div class="sub" id="endsub"></div></div></div>
+    <aside id="panel" class="hidden">
+      <header>
+        <strong>tuning</strong>
+        <button id="toggle" title="hide panel (T)">×</button>
+      </header>
+      <div id="sliders"></div>
+      <div class="row">
+        <button id="newboard">new game (R)</button>
+        <button id="replay" title="same seed">replay seed</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="showpath" checked /> my path</label>
+        <label><input type="checkbox" id="showall" /> all paths</label>
+      </div>
+      <div class="row">
+        <button id="copy">copy config</button>
+        <button id="reset">reset defaults</button>
+      </div>
+      <pre id="log"></pre>
+    </aside>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
