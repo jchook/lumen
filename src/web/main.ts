@@ -544,6 +544,7 @@ canvas.addEventListener("pointerdown", (ev) => {
 canvas.addEventListener("pointermove", (ev) => {
   const t = targetAt(toWorld(ev.clientX, ev.clientY));
   const id = t ? t.id : null;
+  canvas.style.cursor = t ? "pointer" : "crosshair";
   if (id !== hoverId) {
     hoverId = id;
     previewDirty = true;
@@ -695,15 +696,33 @@ function drawPlayer(s: Sprite, t: number, threat: boolean): void {
   }
   if (threat && !s.dying) threatRing(s.x, s.y, r, t, s.phase);
   else if (s.ai && !s.dying && s.light < human(state).light) {
-    // Prey: you outweigh it. Tap to hunt.
-    ctx.strokeStyle = `rgba(120,255,170,${0.35 + 0.2 * Math.sin(t * 4 + s.phase)})`;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([2, 5]);
+    // Prey: you outweigh it. A solid green ring says "tap me"; dim if it is out of reach this round.
+    const me = human(state);
+    const near = Math.hypot(s.tx - me.x, s.ty - me.y) <= reach(me, cfg);
+    const pulse = 0.5 + 0.5 * Math.sin(t * 4 + s.phase);
+    ctx.strokeStyle = `rgba(120,255,170,${near ? 0.7 + 0.3 * pulse : 0.25})`;
+    ctx.lineWidth = near ? 2.5 : 1;
     ctx.beginPath();
-    ctx.arc(s.x, s.y, r + 6, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y, r + 5 + (near ? 2 * pulse : 0), 0, Math.PI * 2);
     ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.font = "10px ui-monospace, Menlo, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = `rgba(120,255,170,${near ? 0.95 : 0.4})`;
+    ctx.fillText(near ? "tap to absorb" : "out of reach", s.x, s.y + r + 26);
   }
+}
+
+/** Whatever the pointer is over and can be tapped gets a plain white ring. */
+function drawHover(): void {
+  if (hoverId === null || state.status !== "playing") return;
+  const target = hoverId < 0 ? players.get(hoverId) : sprites.get(hoverId);
+  if (!target || target.dying) return;
+  const r = hoverId < 0 ? cfg.playerBaseRadius * target.scale : target.radius * target.scale;
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, r + 10, 0, Math.PI * 2);
+  ctx.stroke();
 }
 
 function drawPreview(): void {
@@ -858,6 +877,7 @@ function frame(now: number): void {
   for (const s of players.values()) if (s.ai) drawPlayer(s, t, s.light > meNow.light);
   const me = players.get(human(state).id);
   if (me) drawPlayer(me, t, false);
+  drawHover();
   if (cfg.maxJump > 0 && state.status === "playing") {
     // Your reach, and the reach of anything that can eat you.
     for (const p of state.players) {
