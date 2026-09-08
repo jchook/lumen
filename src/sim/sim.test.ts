@@ -12,8 +12,10 @@ import {
   grownRadius,
   human,
   inertia,
+  judge,
   lumens,
   makeOrb,
+  newFairGame,
   newGame,
   playerById,
   playerRadius,
@@ -420,6 +422,36 @@ describe("opponents", () => {
     rival.radius = playerRadius(0.2, vs);
     const r = round(s, rival.id, vs);
     expect(r.state.status).toBe("won");
+  });
+});
+
+describe("fair starts", () => {
+  test("a fair board has food in reach, no early threat, and a survivable opening", () => {
+    const c: SimConfig = { ...defaultConfig, opponents: 1 };
+    const { state, report } = newFairGame(1, c);
+    expect(report.fair).toBe(true);
+    expect(report.you.count).toBeGreaterThanOrEqual(3);
+    expect(report.you.threats).toBe(0);
+    expect(state.status).toBe("playing");
+  });
+
+  test("an unfair board is rejected with reasons", () => {
+    const c: SimConfig = { ...defaultConfig, opponents: 0, initialOrbs: 0, spawnPerTurn: 0 };
+    const s = newGame(1, c);
+    s.orbs.push(makeOrb(s, 460, 400, STAR)); // outweighs a 3-lumen light, sitting next to it
+    const r = judge(s, c);
+    expect(r.fair).toBe(false);
+    expect(r.reasons).toContain("too little in reach");
+    expect(r.reasons).toContain("something that outweighs you is too close");
+  });
+
+  test("rerolling is deterministic and reports how many seeds it tried", () => {
+    const c: SimConfig = { ...defaultConfig, opponents: 1 };
+    const a = newFairGame(12345, c);
+    const b = newFairGame(12345, c);
+    expect(a.seed).toBe(b.seed);
+    expect(a.tries).toBe(b.tries);
+    expect(JSON.stringify(a.state)).toBe(JSON.stringify(b.state));
   });
 });
 

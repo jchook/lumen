@@ -6,7 +6,7 @@ import {
   defaultConfig,
   effectiveSpeed,
   human,
-  newGame,
+  newFairGame,
   randomSeed,
   reach,
   round,
@@ -327,7 +327,11 @@ function startGame(newSeed: number): void {
     buildSliders();
   }
   levelCleared = false;
-  state = newGame(seed, cfg);
+  const fair = newFairGame(seed, cfg);
+  state = fair.state;
+  seed = fair.seed;
+  if (fair.tries > 1) log(`rerolled ${fair.tries - 1} unfair start${fair.tries > 2 ? "s" : ""}: ${fair.report.reasons.join("; ") || "ok"}`);
+  if (!fair.report.fair) log(`warning: no fair start found in ${fair.tries} tries (${fair.report.reasons.join("; ")})`);
   sprites.clear();
   players.clear();
   particles.length = 0;

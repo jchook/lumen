@@ -50,6 +50,14 @@ bun run build      # static bundle in dist/
 - **The universe is finite.** Spawns fade to zero by `spawnFade` rounds. Stranded with nothing edible
   in reach is "dark". Absorb every opponent to win.
 
+## Fair starts
+
+Roughly a third of raw boards are unwinnable from the first tap: a star within one pull of you, no
+food in reach, or an opponent with a richer neighbourhood. `newFairGame` judges each board (food in
+reach, no early threats, neighbourhood parity, and a cautious line that survives the opening rounds
+against the real opponents) and rerolls the seed deterministically until one passes. The log says
+when a start was rerolled and why.
+
 ## Difficulty ladder
 
 Ten levels, persisted in the browser. Early levels: one dim opponent that never hunts and starts

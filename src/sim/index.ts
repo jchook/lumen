@@ -31,4 +31,6 @@ export {
 } from "./step";
 export type { Intent } from "./step";
 export { round, chooseTarget } from "./ai";
+export { newFairGame, judge, neighbourhood } from "./fair";
+export type { FairnessReport, Neighbourhood } from "./fair";
 export { nextRandom, randomSeed } from "./rng";
