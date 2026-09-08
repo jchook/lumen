@@ -8,6 +8,7 @@ import {
   human,
   newFairGame,
   randomSeed,
+  step,
   reach,
   round,
   spawnRate,
@@ -128,6 +129,7 @@ const elHint = $("hint");
 const elPanel = $("panel");
 const elLog = $("log");
 const elPreview = $<HTMLInputElement>("preview");
+const elSelfPreview = $<HTMLInputElement>("selfpreview");
 const elSprings = $<HTMLInputElement>("springs");
 
 function buildSliders(): void {
@@ -577,6 +579,8 @@ window.addEventListener("keydown", (ev) => {
 });
 
 $("toggle").addEventListener("click", () => elPanel.classList.add("hidden"));
+elPreview.addEventListener("change", () => (previewDirty = true));
+elSelfPreview.addEventListener("change", () => (previewDirty = true));
 $("newboard").addEventListener("click", () => startGame(randomSeed()));
 $("replay").addEventListener("click", () => startGame(seed));
 $("reset").addEventListener("click", () => {
@@ -730,7 +734,8 @@ function drawHover(): void {
 }
 
 function drawPreview(): void {
-  if (!preview || !elPreview.checked || state.status !== "playing") return;
+  if (!preview || state.status !== "playing") return;
+  const full = elPreview.checked;
   const next = preview.state;
   const before = new Map(state.orbs.map((o) => [o.id, o]));
   ctx.save();
@@ -750,9 +755,9 @@ function drawPreview(): void {
     ctx.arc(o.x, o.y, o.radius, 0, Math.PI * 2);
     ctx.stroke();
   }
-  // Where every player ends up, including opponents' replies.
+  // Where every player ends up (opponents only if the full preview is on).
   for (const p of next.players) {
-    if (!p.alive) continue;
+    if (!p.alive || (!full && p.ai)) continue;
     const c = playerColor(p);
     ctx.strokeStyle = `rgba(${c.glow},0.5)`;
     ctx.setLineDash([2, 4]);
@@ -791,7 +796,7 @@ function drawPreview(): void {
     ctx.font = "13px ui-monospace, Menlo, monospace";
     ctx.textAlign = "center";
     ctx.fillStyle = dead ? "rgba(255,80,110,1)" : won ? "rgba(120,255,170,1)" : net < 0 ? "rgba(255,170,120,0.95)" : "rgba(220,235,255,0.9)";
-    const label = dead ? "DEATH" : won ? "WIN" : missed ? "TOO SLOW" : `${net >= 0 ? "+" : "−"}${Math.abs(net).toFixed(1)}`;
+    const label = dead ? "DEATH" : won ? "WIN" : missed ? "TOO SLOW" : `${net >= 0 ? "+" : "−"}${Math.abs(net).toFixed(1)}${full ? "" : " if they hold"}`;
     ctx.fillText(label, target.x, target.y - target.radius - 12);
   }
   ctx.restore();
@@ -827,7 +832,15 @@ function frame(now: number): void {
 
   if (previewDirty) {
     previewDirty = false;
-    preview = hoverId !== null && state.status === "playing" ? round(state, hoverId, cfg) : null;
+    preview = null;
+    if (hoverId !== null && state.status === "playing") {
+      if (elPreview.checked) preview = round(state, hoverId, cfg);
+      else if (elSelfPreview.checked) {
+        // Your move alone: where gravity puts everything if the opponents stood still.
+        const r = step(state, hoverId, cfg);
+        preview = { state: r.state, turns: [{ actor: human(state).id, events: r.events }], events: r.events };
+      }
+    }
   }
 
   // Integrate.

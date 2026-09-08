@@ -50,6 +50,18 @@ bun run build      # static bundle in dist/
 - **The universe is finite.** Spawns fade to zero by `spawnFade` rounds. Stranded with nothing edible
   in reach is "dark". Absorb every opponent to win.
 
+## Reading the board
+
+Hovering an orb shows where your own tap would leave everything: dashed ghosts, lines for what
+moves, a red ring on anything that would land on you, and the net lumens "if they hold". This is on
+by default because the gravity rule is not something a person can simulate in their head, and the
+game is about consequences, not guesswork. The opponent's reply stays hidden; "+ opponent reply" in
+the tuning panel reveals it and is a cheat.
+
+With that preview, a bot that sees only what you see wins 97% of level-1 games and 23% of level-10
+games (`scratchpad/honest.ts` in the session; policy: one-step self-simulation, avoid landing dead,
+keep clear of anything heavier).
+
 ## Fair starts
 
 Roughly a third of raw boards are unwinnable from the first tap: a star within one pull of you, no

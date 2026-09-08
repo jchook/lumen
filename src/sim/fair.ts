@@ -55,7 +55,7 @@ export function judge(state: GameState, cfg: SimConfig, openingRounds = 4): Fair
 function survivesOpening(start: GameState, cfg: SimConfig, rounds: number): boolean {
   let s = start;
   for (let i = 0; i < rounds && s.status === "playing"; i++) {
-    let bestId = -1;
+    let bestId: number | null = null;
     let best = -Infinity;
     for (const t of allTargets(s, human(s).id, cfg)) {
       const r = round(s, t.id, cfg);
@@ -67,7 +67,7 @@ function survivesOpening(start: GameState, cfg: SimConfig, rounds: number): bool
         bestId = t.id;
       }
     }
-    if (bestId < 0) return false;
+    if (bestId === null) return false;
     s = round(s, bestId, cfg).state;
   }
   return true;

@@ -42,7 +42,7 @@ function playLine(seed: number, depth: number): { survived: boolean; score: numb
   while (s.status === "playing") {
     if (s.status !== "playing") break;
     const options = edible(s);
-    let bestId = -1;
+    let bestId: number | null = null;
     let best = DEAD;
     let safe = 0;
     for (const o of options) {
@@ -54,7 +54,7 @@ function playLine(seed: number, depth: number): { survived: boolean; score: numb
         bestId = o.id;
       }
     }
-    if (bestId < 0) return { survived: false, score: human(s).score, safe: safeSum / Math.max(1, moves), moves };
+    if (bestId === null) return { survived: false, score: human(s).score, safe: safeSum / Math.max(1, moves), moves };
     safeSum += safe / options.length;
     moves++;
     const r = round(s, bestId, cfg);
