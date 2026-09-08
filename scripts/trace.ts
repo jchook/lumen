@@ -19,7 +19,7 @@ while (s.status === "playing" && s.time < 180) {
   for (const e of step(s, cfg, dt)) {
     if (e.type === "gone" && e.kind === "light") {
       const by = s.bodies.find((b) => b.id === e.by);
-      console.log(`      ${s.time.toFixed(1)}s ${e.name} absorbed by ${by?.kind === "sun" ? "a sun" : by?.name ?? by?.kind} (${by?.mass.toFixed(0)})`);
+      console.log(`      ${s.time.toFixed(1)}s ${e.name} absorbed by ${by?.name || `a ${by?.mass.toFixed(0)}-lumen body`} (${by?.mass.toFixed(0)})`);
     }
   }
   if (s.time >= next) {

@@ -253,18 +253,28 @@ const saveLevel = () => {
 
 const COLORS: Record<number, string> = {};
 const PALETTE = ["200 90% 78%", "330 90% 70%", "40 95% 65%", "140 70% 60%", "270 80% 72%", "15 90% 65%", "180 70% 60%", "60 80% 65%"];
-function hueOf(b: Body): string {
-  if (b.kind === "sun") return "32 100% 70%";
-  if (b.kind === "orb") {
-    if (b.from) return hueOf(state.bodies.find((x) => x.id === b.from) ?? b);
-    return b.mass > 3 ? "35 90% 75%" : b.mass > 1.2 ? "210 60% 82%" : "220 40% 88%";
-  }
+/** A light's identity colour. */
+function identity(b: Body): string {
   if (!b.ai) return PALETTE[0]!;
   if (!COLORS[b.id]) {
     const n = Object.keys(COLORS).length;
     COLORS[b.id] = PALETTE[1 + (n % (PALETTE.length - 1))]!;
   }
   return COLORS[b.id]!;
+}
+/**
+ * What a body's glow says about it, relative to me: warm and red if it can absorb me, cool and
+ * blue-white if I can absorb it, dim grey if we're equal. Exhaust carries its owner's identity.
+ */
+function hueOf(b: Body, me: Body): string {
+  if (b.kind === "light" && b === me) return identity(b);
+  if (b.kind === "orb" && b.from) {
+    const owner = state.bodies.find((x) => x.id === b.from);
+    if (owner) return identity(owner);
+  }
+  if (b.mass > me.mass) return b.mass > me.mass * 3 ? "18 100% 62%" : "348 90% 66%";
+  if (b.mass < me.mass) return b.mass < me.mass * 0.2 ? "215 50% 88%" : "200 85% 78%";
+  return "220 10% 70%";
 }
 
 function onEvents(ev: Ev[]): void {
@@ -275,15 +285,15 @@ function onEvents(ev: Ev[]): void {
         const s = spring(b);
         s.v -= 40;
         s.flash = 1;
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < 3; i++) {
           const a = Math.atan2(-e.dy, -e.dx) + (Math.random() - 0.5) * 0.9;
           const sp = 60 + Math.random() * 120;
-          puffs.push({ x: e.x, y: e.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, hue: hueOf(b) });
+          puffs.push({ x: e.x, y: e.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, hue: identity(b) });
         }
       }
     } else if (e.type === "gone" && e.kind === "light") {
       const by = state.bodies.find((x) => x.id === e.by);
-      const who = by?.kind === "sun" ? "a sun" : by?.name || "an orb";
+      const who = by?.name || `a ${by?.mass.toFixed(0)}-lumen body`;
       say(`${e.name} absorbed by ${who}`);
     } else if (e.type === "over") {
       const me = human(state);
@@ -339,7 +349,7 @@ function glow(x: number, y: number, r: number, hue: string, inner = 1, halo = 2.
 
 function drawPath(b: Body, alpha: number): void {
   const p = predict(state, b, cfg, 4, 0.1);
-  ctx.strokeStyle = `hsla(${hueOf(b)} / ${alpha})`;
+  ctx.strokeStyle = `hsla(${identity(b)} / ${alpha})`;
   ctx.lineWidth = 1;
   ctx.setLineDash([3, 5]);
   ctx.beginPath();
@@ -372,7 +382,7 @@ function drawEdgeMarkers(me: Body): void {
     ctx.save();
     ctx.translate(ex, ey);
     ctx.rotate(ang);
-    ctx.fillStyle = `hsla(${hueOf(t.body)} / 0.85)`;
+    ctx.fillStyle = `hsla(${hueOf(t.body, me)} / 0.85)`;
     ctx.beginPath();
     ctx.moveTo(s, 0);
     ctx.lineTo(-s * 0.7, -s * 0.7);
@@ -405,30 +415,35 @@ function draw(dt: number): void {
     s.flash *= Math.exp(-dt * 8);
     const r = Math.max(0.6, s.r) * z;
     if (sx + r * 3 < 0 || sx - r * 3 > W || sy + r * 3 < 0 || sy - r * 3 > H) continue;
-    const hue = hueOf(b);
-    if (b.kind === "sun") {
-      glow(sx, sy, r, hue, 0.95, 2.2);
-      ctx.fillStyle = "hsla(40 100% 92% / 0.95)";
+    const hue = hueOf(b, me);
+    const isLight = b.kind === "light";
+    const heavier = b.mass > me.mass && me.alive && b !== me;
+    // Halo says threat or food; the core is white for lights, tinted for orbs.
+    glow(sx, sy, r, hue, isLight ? 0.9 + s.flash * 0.3 : 0.75, isLight ? 2.8 : b.mass >= cfg.gravityMass ? 1.9 : 2);
+    if (isLight) {
+      ctx.fillStyle = `hsla(${identity(b)} / 0.95)`;
       ctx.beginPath();
-      ctx.arc(sx, sy, r * 0.94, 0, Math.PI * 2);
+      ctx.arc(sx, sy, Math.max(1, r * 0.62), 0, Math.PI * 2);
       ctx.fill();
-      continue;
+      ctx.fillStyle = "hsla(0 0% 100% / 0.95)";
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.max(0.8, r * 0.36), 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = b.mass >= cfg.gravityMass ? "hsla(30 80% 92% / 0.9)" : `hsla(${hue} / 0.9)`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.max(0.8, r * (b.mass >= cfg.gravityMass ? 0.82 : 0.5)), 0, Math.PI * 2);
+      ctx.fill();
     }
-    const heavier = b.mass > me.mass && me.alive;
-    glow(sx, sy, r, hue, b.kind === "light" ? 0.9 + s.flash * 0.3 : 0.7, b.kind === "light" ? 2.8 : 2);
-    ctx.fillStyle = b.kind === "light" ? "hsla(0 0% 100% / 0.9)" : `hsla(${hue} / 0.9)`;
-    ctx.beginPath();
-    ctx.arc(sx, sy, Math.max(0.8, r * (b.kind === "light" ? 0.55 : 0.5)), 0, Math.PI * 2);
-    ctx.fill();
-    if (heavier && b.kind === "light") {
+    if (heavier && isLight) {
       ctx.strokeStyle = "hsla(350 90% 65% / 0.8)";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(sx, sy, r + 5, 0, Math.PI * 2);
       ctx.stroke();
     }
-    if (b.kind === "light") {
-      ctx.fillStyle = `hsla(${hue} / 0.9)`;
+    if (isLight) {
+      ctx.fillStyle = `hsla(${identity(b)} / 0.9)`;
       ctx.font = "11px ui-monospace, Menlo, monospace";
       ctx.textAlign = "center";
       ctx.fillText(`${b.ai ? b.name + " " : ""}${b.mass.toFixed(b.mass < 10 ? 1 : 0)}`, sx, sy - r - 9);
@@ -449,6 +464,32 @@ function draw(dt: number): void {
   }
 
   if (me.alive) drawEdgeMarkers(me);
+
+  // Hover: the lumens of whatever is under the cursor.
+  if (pointer.inside) {
+    let hit: { b: Body; sx: number; sy: number; r: number } | null = null;
+    for (const b of bodies) {
+      if (b === me) continue;
+      const [sx, sy] = toScreen(b.x, b.y);
+      const r = Math.max(8, radiusOf(b.mass, cfg) * z * 1.4);
+      const d = Math.hypot(pointer.x - sx, pointer.y - sy);
+      if (d < r && (!hit || d < Math.hypot(pointer.x - hit.sx, pointer.y - hit.sy))) hit = { b, sx, sy, r };
+    }
+    if (hit) {
+      const b = hit.b;
+      const verdict = b.mass > me.mass ? "absorbs you" : b.mass < me.mass ? "food" : "equal";
+      ctx.font = "12px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "center";
+      ctx.fillStyle = `hsla(${hueOf(b, me)} / 0.95)`;
+      const label = `${b.kind === "light" ? b.name + " · " : ""}${b.mass.toFixed(b.mass < 10 ? 1 : 0)} · ${verdict}`;
+      ctx.fillText(label, hit.sx, hit.sy + hit.r + 16);
+      ctx.strokeStyle = `hsla(${hueOf(b, me)} / 0.6)`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(hit.sx, hit.sy, hit.r + 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
 
   // Aim: a line from me to the cursor with the burn strength as its brightness.
   if (me.alive && pointer.inside && state.status === "playing") {
@@ -480,7 +521,7 @@ function hud(): void {
     .filter((b) => b.kind === "light")
     .sort((a, b) => b.mass - a.mass);
   rankEl.innerHTML = ranked
-    .map((b) => `<span style="color:hsl(${hueOf(b)})${b.alive ? "" : ";opacity:.35;text-decoration:line-through"}"><b>${b.name}</b> ${b.mass.toFixed(1)}</span>`)
+    .map((b) => `<span style="color:hsl(${identity(b)})${b.alive ? "" : ";opacity:.35;text-decoration:line-through"}"><b>${b.name}</b> ${b.mass.toFixed(1)}</span>`)
     .join("");
   levelEl.textContent = `${cfg.players - 1} rival${cfg.players - 1 === 1 ? "" : "s"} · ${state.time.toFixed(0)}s · seed ${seed}`;
 }
@@ -519,14 +560,15 @@ interface SliderDef {
 }
 const SLIDERS: SliderDef[] = [
   { key: "G", min: 500, max: 8000, stepSize: 100 },
-  { key: "sunMass", min: 100, max: 1000, stepSize: 20, restart: true },
+  { key: "gravityMass", min: 5, max: 100, stepSize: 1 },
+  { key: "orbMassMax", min: 20, max: 300, stepSize: 5, restart: true },
+  { key: "giants", min: 0, max: 6, stepSize: 1, restart: true },
   { key: "absorbRate", min: 0.2, max: 10, stepSize: 0.1 },
   { key: "burnFraction", min: 0.01, max: 0.15, stepSize: 0.005 },
   { key: "ejectSpeed", min: 100, max: 1200, stepSize: 20 },
   { key: "burnCooldown", min: 0.02, max: 0.6, stepSize: 0.02 },
   { key: "orbs", min: 10, max: 200, stepSize: 5, restart: true },
   { key: "startMass", min: 2, max: 30, stepSize: 1, restart: true },
-  { key: "wind", min: 0, max: 4, stepSize: 0.1 },
   { key: "radiusScale", min: 2, max: 8, stepSize: 0.25 },
 ];
 const slidersEl = $("sliders");

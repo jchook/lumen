@@ -4,8 +4,8 @@ import { botTurn, decide } from "./bots";
 
 const cfg: Config = { ...defaultConfig };
 const empty = (seed = 1): State => ({ seed, rng: () => 0.5, time: 0, status: "playing", nextId: 1, bodies: [] });
-const add = (s: State, kind: "sun" | "orb" | "light", x: number, y: number, mass: number, extra: Partial<State["bodies"][number]> = {}) => {
-  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: kind === "sun", from: 0, cooldown: 0, ...extra };
+const add = (s: State, kind: "orb" | "light", x: number, y: number, mass: number, extra: Partial<State["bodies"][number]> = {}) => {
+  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, ...extra };
   s.bodies.push(b);
   return b;
 };
@@ -32,7 +32,7 @@ describe("torus", () => {
 describe("gravity", () => {
   test("a circular orbit stays circular", () => {
     const s = empty();
-    const sun = add(s, "sun", 1200, 1200, cfg.sunMass);
+    const sun = add(s, "orb", 1200, 1200, 200, { anchored: true });
     const d = 300;
     const v = orbitalSpeed(sun.mass, d, cfg);
     const o = add(s, "orb", 1200 + d, 1200, 1, { vy: v });
@@ -55,7 +55,7 @@ describe("gravity", () => {
   });
   test("softening bounds acceleration at the centre", () => {
     const s = empty();
-    add(s, "sun", 1000, 1000, cfg.sunMass);
+    add(s, "orb", 1000, 1000, 200, { anchored: true });
     const o = add(s, "orb", 1001, 1000, 1);
     run(s, 0.5);
     expect(Math.hypot(o.vx, o.vy)).toBeLessThanOrEqual(cfg.maxSpeed);
@@ -167,17 +167,21 @@ describe("setup", () => {
     const a = newGame(7, cfg);
     const b = newGame(7, cfg);
     expect(a.bodies).toEqual(b.bodies);
-    expect(a.bodies.filter((x) => x.kind === "sun").length).toBe(cfg.suns);
+    expect(a.bodies.filter((x) => x.mass >= cfg.gravityMass).length).toBeGreaterThanOrEqual(cfg.giants);
     expect(lights(a).length).toBe(cfg.players);
     expect(human(a).name).toBe("You");
     expect(a.bodies.filter((x) => x.kind === "orb").length).toBe(cfg.orbs);
+    const masses = a.bodies.filter((x) => x.kind === "orb").map((x) => x.mass);
+    expect(masses.filter((m) => m < 2).length).toBeGreaterThan(masses.length / 3);
   });
-  test("nothing starts overlapping a sun", () => {
-    const s = newGame(3, cfg);
-    const suns = s.bodies.filter((b) => b.kind === "sun");
-    for (const b of s.bodies) {
-      if (b.kind === "sun") continue;
-      for (const sun of suns) expect(dist(b, sun, cfg)).toBeGreaterThan(radiusOf(sun.mass, cfg) + radiusOf(b.mass, cfg));
+  test("nothing starts overlapping anything that could eat it", () => {
+    for (const seed of [3, 4, 5]) {
+      const s = newGame(seed, cfg);
+      for (const a of s.bodies)
+        for (const b of s.bodies) {
+          if (a === b || a.mass <= b.mass) continue;
+          expect(dist(a, b, cfg)).toBeGreaterThan(radiusOf(a.mass, cfg) + radiusOf(b.mass, cfg));
+        }
     }
   });
   test("a whole game stays alive without input for a while", () => {
@@ -213,30 +217,13 @@ describe("bots", () => {
   test("botTurn spreads decisions over time", () => {
     const s = newGame(5, cfg);
     let burns = 0;
-    for (let i = 0; i < 120; i++) {
+    const frames = 600;
+    for (let i = 0; i < frames; i++) {
       step(s, cfg, 1 / 60);
       burns += botTurn(s, cfg, 1 / 60).length;
     }
     expect(burns).toBeGreaterThan(0);
-    expect(burns).toBeLessThan(120 * (cfg.players - 1));
-  });
-});
-
-describe("solar wind", () => {
-  test("a sun gives back what it eats", () => {
-    const s = empty();
-    const sun = add(s, "sun", 1000, 1000, cfg.sunMass);
-    add(s, "orb", 1000 + radiusOf(cfg.sunMass, cfg) - 2, 1000, 3);
-    run(s, 12);
-    expect(sun.mass).toBeLessThan(cfg.sunMass + 3);
-    expect(s.bodies.filter((b) => b.kind === "orb" && b.alive).length).toBeGreaterThan(0);
-    expect(total(s)).toBeCloseTo(cfg.sunMass + 3, 6);
-  });
-  test("a sun at rest emits nothing", () => {
-    const s = empty();
-    add(s, "sun", 1000, 1000, cfg.sunMass);
-    run(s, 5);
-    expect(s.bodies.length).toBe(1);
+    expect(burns).toBeLessThan((frames / 60 / 0.35) * (cfg.players - 1));
   });
 });
 

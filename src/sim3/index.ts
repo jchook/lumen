@@ -1,9 +1,10 @@
 /**
  * LUMEN v3 — realtime orbital absorption.
  *
- * A torus arena with a few suns. Every body carries lumens (its mass); radius grows with the square
- * root of mass so area is mass. Bodies above `gravityMass` bend space: everything else falls toward
- * them with softened Newtonian gravity and keeps its momentum, so orbs and lights orbit.
+ * A torus arena of bodies at every scale, from specks to giants. Every body carries lumens (its
+ * mass); radius grows with the square root of mass so area is mass. Bodies above `gravityMass` bend
+ * space: everything falls toward them with softened Newtonian gravity and keeps its momentum, so
+ * the small orbit the large, and the large drift slowly around each other.
  *
  * A light moves by burning: it flings a fraction of its own mass out the back as a new orb and
  * recoils the other way (momentum is conserved, so the exhaust is real food for whoever is chasing).
@@ -13,7 +14,7 @@
  * Fixed timestep, seeded, headless. The renderer only interpolates.
  */
 
-export type Kind = "sun" | "orb" | "light";
+export type Kind = "orb" | "light";
 
 export interface Body {
   id: number;
@@ -27,7 +28,7 @@ export interface Body {
   name: string;
   ai: boolean;
   alive: boolean;
-  /** Suns don't move. */
+  /** Pinned in place (tests and special boards). */
   anchored: boolean;
   /** Exhaust: the light that burned it, for colouring. */
   from: number;
@@ -38,11 +39,15 @@ export interface Body {
 export interface Config {
   width: number;
   height: number;
-  suns: number;
-  sunMass: number;
+  /** Bodies seeded at the start, besides the lights. */
   orbs: number;
+  /** Mass range of seeded bodies; the distribution is heavily skewed toward small. */
   orbMassMin: number;
   orbMassMax: number;
+  /** How many of the seeded bodies are giants near orbMassMax, spaced apart. */
+  giants: number;
+  /** How many are middleweights (a fraction of a giant), the roaming hazards. */
+  middleweights: number;
   /** Total lights, including the human (id 1). */
   players: number;
   startMass: number;
@@ -68,31 +73,23 @@ export interface Config {
   minBurnMass: number;
   /** Bodies below this mass vanish. */
   dust: number;
-  /** Suns radiate what they've eaten back out as orbs: mass per second per sun while above sunMass. */
-  wind: number;
-  /** Seconds between wind orbs. */
-  windEvery: number;
-  /** Wind launch speed as a multiple of circular; √2 escapes. */
-  windSpeed: number;
-  /** Share of starting orbs seeded in the open field between suns rather than in close orbits. */
-  openField: number;
 }
 
 export const defaultConfig: Config = {
   width: 2400,
   height: 2400,
-  suns: 3,
-  sunMass: 400,
-  orbs: 80,
+  orbs: 48,
   orbMassMin: 0.4,
-  orbMassMax: 5,
+  orbMassMax: 120,
+  giants: 3,
+  middleweights: 3,
   players: 4,
   startMass: 8,
-  G: 2500,
+  G: 3000,
   soft: 40,
-  gravityMass: 40,
-  maxAccel: 600,
-  maxSpeed: 500,
+  gravityMass: 30,
+  maxAccel: 500,
+  maxSpeed: 400,
   radiusScale: 4,
   absorbRate: 2.5,
   burnFraction: 0.04,
@@ -100,10 +97,6 @@ export const defaultConfig: Config = {
   burnCooldown: 0.15,
   minBurnMass: 0.5,
   dust: 0.05,
-  wind: 0.8,
-  windEvery: 1.5,
-  windSpeed: 1.35,
-  openField: 0.5,
 };
 
 export type Ev =
@@ -195,72 +188,79 @@ const NAMES = ["Umbra", "Nyx", "Sable", "Vesper", "Morrow", "Ash", "Dusk", "Rune
 export function newGame(seed: number, cfg: Config = defaultConfig): State {
   const s: State = { seed, rng: mulberry32(seed), time: 0, status: "playing", nextId: 1, bodies: [] };
   const rng = s.rng;
-  // Suns on a loose ring around the arena centre, jittered.
-  const suns: Body[] = [];
   const cx = cfg.width / 2;
   const cy = cfg.height / 2;
   const ring = Math.min(cfg.width, cfg.height) * 0.3;
-  for (let i = 0; i < cfg.suns; i++) {
-    const a = (i / cfg.suns) * Math.PI * 2 + rng() * 0.6;
+  // Giants on a loose ring, spaced apart. They move, but slowly: they only feel each other.
+  const giants: Body[] = [];
+  for (let i = 0; i < cfg.giants; i++) {
+    const a = (i / cfg.giants) * Math.PI * 2 + rng() * 0.6;
     const r = ring * (0.8 + rng() * 0.4);
-    suns.push(makeBody(s, "sun", wrap(cx + Math.cos(a) * r, cfg.width), wrap(cy + Math.sin(a) * r, cfg.height), cfg.sunMass, { anchored: true }));
+    const mass = cfg.orbMassMax * (0.6 + rng() * 0.4);
+    giants.push(makeBody(s, "orb", wrap(cx + Math.cos(a) * r, cfg.width), wrap(cy + Math.sin(a) * r, cfg.height), mass));
   }
-  const placeInOrbit = (kind: Kind, mass: number, sun: Body, d: number, angle: number, extra: Partial<Body> = {}): Body => {
-    const x = wrap(sun.x + Math.cos(angle) * d, cfg.width);
-    const y = wrap(sun.y + Math.sin(angle) * d, cfg.height);
-    const v = orbitalSpeed(sun.mass, d, cfg);
-    return makeBody(s, kind, x, y, mass, { vx: -Math.sin(angle) * v, vy: Math.cos(angle) * v, ...extra });
+  const nearestGiant = (x: number, y: number): { g: Body; dx: number; dy: number; d: number } => {
+    let best: { g: Body; dx: number; dy: number; d: number } | null = null;
+    for (const g of giants) {
+      const [dx, dy] = delta(g.x, g.y, x, y, cfg);
+      const d = Math.hypot(dx, dy);
+      if (!best || d < best.d) best = { g, dx, dy, d };
+    }
+    return best!;
   };
-  // Lights: the human first, spaced around different suns at a comfortable orbit.
+  /** A body at (x, y) with the circular speed of the nearest giant, so it orbits rather than falls. */
+  const drifting = (kind: Kind, mass: number, x: number, y: number, extra: Partial<Body> = {}): Body => {
+    const n = nearestGiant(x, y);
+    const d = n.d || 1;
+    const v = orbitalSpeed(n.g.mass, d, cfg);
+    return makeBody(s, kind, x, y, mass, { vx: (-n.dy / d) * v + n.g.vx, vy: (n.dx / d) * v + n.g.vy, ...extra });
+  };
+  /** A spot at least `gap` from every giant's edge and every light, or the best found. */
+  const openSpot = (gap: number): [number, number] => {
+    let bx = 0;
+    let by = 0;
+    let best = -Infinity;
+    for (let tries = 0; tries < 24; tries++) {
+      const px = rng() * cfg.width;
+      const py = rng() * cfg.height;
+      let g = Infinity;
+      for (const b of s.bodies) {
+        if (b.mass < cfg.gravityMass && b.kind !== "light") continue;
+        g = Math.min(g, dist({ x: px, y: py }, b, cfg) - radiusOf(b.mass, cfg));
+      }
+      if (g > best) {
+        best = g;
+        bx = px;
+        by = py;
+      }
+      if (g >= gap) break;
+    }
+    return [bx, by];
+  };
+  // Lights: the human first, each in a comfortable orbit around a different giant.
   for (let i = 0; i < cfg.players; i++) {
-    const sun = suns[i % suns.length]!;
-    const d = radiusOf(sun.mass, cfg) + 220 + rng() * 80;
-    placeInOrbit("light", cfg.startMass, sun, d, rng() * Math.PI * 2, {
+    const g = giants[i % giants.length]!;
+    const d = radiusOf(g.mass, cfg) + 240 + rng() * 80;
+    const a = rng() * Math.PI * 2;
+    drifting("light", cfg.startMass, wrap(g.x + Math.cos(a) * d, cfg.width), wrap(g.y + Math.sin(a) * d, cfg.height), {
       name: i === 0 ? "You" : NAMES[(i - 1) % NAMES.length]!,
       ai: i !== 0,
     });
   }
-  // Orbs: heavy tail of small ones. Some in close prograde orbits, the rest scattered across the
-  // open field and given the circular speed of whichever sun is nearest, so they drift rather
-  // than fall.
-  for (let i = 0; i < cfg.orbs; i++) {
-    const t = rng();
-    const mass = cfg.orbMassMin + (cfg.orbMassMax - cfg.orbMassMin) * t * t;
-    if (rng() < cfg.openField) {
-      let x = 0;
-      let y = 0;
-      let nearest = suns[0]!;
-      let best = -1;
-      // Rejection-sample a spot at least a good way from every sun.
-      for (let tries = 0; tries < 20; tries++) {
-        const px = rng() * cfg.width;
-        const py = rng() * cfg.height;
-        let gap = Infinity;
-        let who = suns[0]!;
-        for (const su of suns) {
-          const g = dist({ x: px, y: py }, su, cfg) - radiusOf(su.mass, cfg);
-          if (g < gap) {
-            gap = g;
-            who = su;
-          }
-        }
-        if (gap > best) {
-          best = gap;
-          x = px;
-          y = py;
-          nearest = who;
-        }
-        if (gap > 300) break;
-      }
-      const [dx, dy] = delta(nearest.x, nearest.y, x, y, cfg);
-      const d = Math.hypot(dx, dy) || 1;
-      const v = orbitalSpeed(nearest.mass, d, cfg);
-      makeBody(s, "orb", x, y, mass, { vx: (-dy / d) * v, vy: (dx / d) * v });
-    } else {
-      const sun = suns[Math.floor(rng() * suns.length)]!;
-      const d = radiusOf(sun.mass, cfg) + 40 + rng() * (ring * 0.9);
-      placeInOrbit("orb", mass, sun, d, rng() * Math.PI * 2);
-    }
+  // Middleweights: a quarter to a half of a giant, kept well away from everything heavy.
+  for (let i = 0; i < cfg.middleweights; i++) {
+    const mass = cfg.orbMassMax * (0.25 + rng() * 0.25);
+    const [x, y] = openSpot(320);
+    drifting("orb", mass, x, y);
+  }
+  // Everything else is lighter than a starting light's future: specks mostly, some morsels, a few
+  // prizes that a grown light can take. None of these attract.
+  for (let i = giants.length + cfg.middleweights; i < cfg.orbs; i++) {
+    const u = rng();
+    const top = Math.min(cfg.gravityMass * 0.6, cfg.orbMassMax * 0.15);
+    const mass = u < 0.6 ? cfg.orbMassMin + rng() * 1.6 : u < 0.85 ? 2 + rng() * 4 : 6 + rng() * (top - 6);
+    const [x, y] = openSpot(120);
+    drifting("orb", mass, x, y);
   }
   return s;
 }
@@ -384,28 +384,6 @@ function absorb(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   }
 }
 
-/** Suns don't keep what they eat: the excess comes back out as slow orbs on a rising orbit. */
-function solarWind(s: State, cfg: Config, dt: number): void {
-  const slot = Math.floor(s.time / cfg.windEvery);
-  if (slot === Math.floor((s.time - dt) / cfg.windEvery)) return;
-  for (const sun of s.bodies) {
-    if (sun.kind !== "sun") continue;
-    const excess = sun.mass - cfg.sunMass;
-    if (excess <= 0) continue;
-    const m = Math.min(excess, cfg.wind * cfg.windEvery);
-    if (m < cfg.dust * 4) continue;
-    const a = (sun.id * 2.399 + slot * 1.618) % (Math.PI * 2);
-    // Thrown out at near-escape speed on a long ellipse, so it crosses the open field.
-    const d = radiusOf(sun.mass, cfg) + radiusOf(m, cfg) + 40;
-    const v = orbitalSpeed(sun.mass, d, cfg) * cfg.windSpeed;
-    sun.mass -= m;
-    makeBody(s, "orb", wrap(sun.x + Math.cos(a) * d, cfg.width), wrap(sun.y + Math.sin(a) * d, cfg.height), m, {
-      vx: -Math.sin(a) * v,
-      vy: Math.cos(a) * v,
-    });
-  }
-}
-
 function finish(s: State, ev: Ev[]): void {
   const me = s.bodies.find((b) => b.kind === "light" && !b.ai);
   const rivals = s.bodies.filter((b) => b.kind === "light" && b.ai);
@@ -424,7 +402,6 @@ export function step(s: State, cfg: Config, dt: number, ev: Ev[] = []): Ev[] {
   gravity(s, cfg, dt);
   move(s, cfg, dt);
   absorb(s, cfg, dt, ev);
-  solarWind(s, cfg, dt);
   // Sweep the dead so the pair loop stays cheap.
   s.bodies = s.bodies.filter((b) => b.alive || b.kind === "light");
   s.time += dt;
