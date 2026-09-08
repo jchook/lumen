@@ -2,6 +2,7 @@ import {
   burn,
   defaultConfig,
   delta,
+  dist,
   human,
   lights,
   newGame,
@@ -143,6 +144,24 @@ function toScreen(x: number, y: number): [number, number] {
   return [W / 2 + dx * z, H / 2 + dy * z];
 }
 
+/** How close my free-fall path comes to anything heavier in the next few seconds. */
+function dangerAhead(me: Body): { gap: number; body: Body } | null {
+  const path = predict(state, me, cfg, 4, 0.2);
+  let worst: { gap: number; body: Body } | null = null;
+  for (const t of threats(state, me, cfg)) {
+    if (t.d > 900) break;
+    const R = radiusOf(t.body.mass, cfg) + radiusOf(me.mass, cfg);
+    let gap = t.d;
+    for (const p of path) {
+      const [dx, dy] = delta(p.x, p.y, t.body.x, t.body.y, cfg);
+      const g = Math.hypot(dx, dy) - R;
+      if (g < gap) gap = g;
+    }
+    if (!worst || gap < worst.gap) worst = { gap, body: t.body };
+  }
+  return worst;
+}
+
 function updateCamera(dt: number): void {
   const me = human(state);
   const focus = me.alive ? me : (lights(state)[0] ?? me);
@@ -151,13 +170,22 @@ function updateCamera(dt: number): void {
   const k = 1 - Math.exp(-dt * 6);
   cam.x = ((cam.x + dx * k) % cfg.width + cfg.width) % cfg.width;
   cam.y = ((cam.y + dy * k) % cfg.height + cfg.height) % cfg.height;
-  // Zoom out as you grow, and enough to keep the nearest threat on screen.
+  // Zoom out as you grow. Then, if anything heavier is near or on my path, zoom out enough to
+  // show all of it with room around it, and further the closer the path comes to it.
   const r = radiusOf(focus.mass, cfg);
   let want = Math.max(760, r * 40);
-  const near = threats(state, focus, cfg).filter((t) => t.body.kind !== "sun" || t.d < 320)[0];
-  if (near && near.d < 700) want = Math.max(want, (near.d + radiusOf(near.body.mass, cfg) * 2 + r * 2) * 2.4);
+  const danger = dangerAhead(focus);
+  if (danger) {
+    const R = radiusOf(danger.body.mass, cfg);
+    const centre = dist(focus, danger.body, cfg);
+    const fit = 2 * (centre + R + 140);
+    const alarm = danger.gap < 220 ? 1 + (1 - Math.max(0, danger.gap) / 220) * 0.8 : 1;
+    want = Math.max(want, fit * alarm, danger.gap < 220 ? 1300 : 0);
+  }
   want = Math.min(want, Math.min(cfg.width, cfg.height));
-  cam.view += (want - cam.view) * (1 - Math.exp(-dt * 1.5));
+  // Snap out fast, ease back in slowly.
+  const rate = want > cam.view ? 4 : 0.8;
+  cam.view += (want - cam.view) * (1 - Math.exp(-dt * rate));
 }
 
 // ---------- input ----------
@@ -542,3 +570,6 @@ $("reset").addEventListener("click", () => {
   reset(seed);
 });
 say(`seed ${seed} · ${cfg.players - 1} rivals`);
+
+// Debug hook for headless checks.
+(window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg };

@@ -72,6 +72,10 @@ export interface Config {
   wind: number;
   /** Seconds between wind orbs. */
   windEvery: number;
+  /** Wind launch speed as a multiple of circular; √2 escapes. */
+  windSpeed: number;
+  /** Share of starting orbs seeded in the open field between suns rather than in close orbits. */
+  openField: number;
 }
 
 export const defaultConfig: Config = {
@@ -98,6 +102,8 @@ export const defaultConfig: Config = {
   dust: 0.05,
   wind: 0.8,
   windEvery: 1.5,
+  windSpeed: 1.35,
+  openField: 0.5,
 };
 
 export type Ev =
@@ -214,13 +220,47 @@ export function newGame(seed: number, cfg: Config = defaultConfig): State {
       ai: i !== 0,
     });
   }
-  // Orbs: prograde orbits, heavy tail of small ones.
+  // Orbs: heavy tail of small ones. Some in close prograde orbits, the rest scattered across the
+  // open field and given the circular speed of whichever sun is nearest, so they drift rather
+  // than fall.
   for (let i = 0; i < cfg.orbs; i++) {
-    const sun = suns[Math.floor(rng() * suns.length)]!;
     const t = rng();
     const mass = cfg.orbMassMin + (cfg.orbMassMax - cfg.orbMassMin) * t * t;
-    const d = radiusOf(sun.mass, cfg) + 40 + rng() * (ring * 0.9);
-    placeInOrbit("orb", mass, sun, d, rng() * Math.PI * 2);
+    if (rng() < cfg.openField) {
+      let x = 0;
+      let y = 0;
+      let nearest = suns[0]!;
+      let best = -1;
+      // Rejection-sample a spot at least a good way from every sun.
+      for (let tries = 0; tries < 20; tries++) {
+        const px = rng() * cfg.width;
+        const py = rng() * cfg.height;
+        let gap = Infinity;
+        let who = suns[0]!;
+        for (const su of suns) {
+          const g = dist({ x: px, y: py }, su, cfg) - radiusOf(su.mass, cfg);
+          if (g < gap) {
+            gap = g;
+            who = su;
+          }
+        }
+        if (gap > best) {
+          best = gap;
+          x = px;
+          y = py;
+          nearest = who;
+        }
+        if (gap > 300) break;
+      }
+      const [dx, dy] = delta(nearest.x, nearest.y, x, y, cfg);
+      const d = Math.hypot(dx, dy) || 1;
+      const v = orbitalSpeed(nearest.mass, d, cfg);
+      makeBody(s, "orb", x, y, mass, { vx: (-dy / d) * v, vy: (dx / d) * v });
+    } else {
+      const sun = suns[Math.floor(rng() * suns.length)]!;
+      const d = radiusOf(sun.mass, cfg) + 40 + rng() * (ring * 0.9);
+      placeInOrbit("orb", mass, sun, d, rng() * Math.PI * 2);
+    }
   }
   return s;
 }
@@ -355,8 +395,9 @@ function solarWind(s: State, cfg: Config, dt: number): void {
     const m = Math.min(excess, cfg.wind * cfg.windEvery);
     if (m < cfg.dust * 4) continue;
     const a = (sun.id * 2.399 + slot * 1.618) % (Math.PI * 2);
-    const d = radiusOf(sun.mass, cfg) + radiusOf(m, cfg) + 24;
-    const v = orbitalSpeed(sun.mass, d, cfg) * 1.12;
+    // Thrown out at near-escape speed on a long ellipse, so it crosses the open field.
+    const d = radiusOf(sun.mass, cfg) + radiusOf(m, cfg) + 40;
+    const v = orbitalSpeed(sun.mass, d, cfg) * cfg.windSpeed;
     sun.mass -= m;
     makeBody(s, "orb", wrap(sun.x + Math.cos(a) * d, cfg.width), wrap(sun.y + Math.sin(a) * d, cfg.height), m, {
       vx: -Math.sin(a) * v,
