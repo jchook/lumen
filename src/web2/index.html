@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>LUMEN</title>
+    <link rel="stylesheet" href="./style.css" />
+    <style>
+      #hud .vs { display: flex; gap: 18px; align-items: baseline; margin-top: 4px; }
+      #hud .vs .them { color: rgb(255, 110, 170); font-size: 22px; font-weight: 300; }
+      #hud .clock { font-variant-numeric: tabular-nums; }
+      #hold { position: fixed; left: 22px; bottom: 22px; font: inherit; font-size: 12px; letter-spacing: 0.15em; color: var(--ink); background: rgba(120,140,200,0.12); border: 1px solid rgba(120,140,200,0.3); border-radius: 4px; padding: 8px 14px; cursor: pointer; }
+      #hold:hover { background: rgba(120,140,200,0.25); }
+      #hold[disabled] { opacity: 0.35; cursor: default; }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="hud">
+      <div class="score"><span id="light">0</span></div>
+      <div class="vs"><span class="them" id="them">Umbra 0</span><span class="meta clock" id="clock"></span></div>
+      <div class="meta" id="level"></div>
+      <div class="meta" id="status"></div>
+      <div class="meta keys">tap an orb in reach · space = hold · R new game · [ ] level · T tuning</div>
+    </div>
+    <button id="hold" title="hold position (space)">hold</button>
+    <div id="hint">collect the light</div>
+    <aside id="panel" class="hidden">
+      <header>
+        <strong>tuning</strong>
+        <button id="toggle" title="hide panel (T)">×</button>
+      </header>
+      <div id="sliders"></div>
+      <div class="row">
+        <button id="newboard">new game (R)</button>
+        <button id="replay" title="same seed">replay seed</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="selfpreview" checked /> show my move</label>
+        <label><input type="checkbox" id="springs" checked /> springs</label>
+      </div>
+      <div class="row">
+        <button id="copy">copy config</button>
+        <button id="reset">reset defaults</button>
+      </div>
+      <pre id="log"></pre>
+    </aside>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

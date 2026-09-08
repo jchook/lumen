@@ -13,7 +13,7 @@
     "dev": "bun --hot index.ts",
     "start": "bun index.ts",
     "test": "bun test",
-    "build": "bun build src/web/index.html --outdir dist --minify",
+    "build": "bun build src/web2/index.html --outdir dist --minify && bun build src/web/index.html --outdir dist/v1 --minify",
     "typecheck": "tsc --noEmit",
     "bots": "bun scripts/bots.ts",
     "grade": "bun scripts/grade.ts",

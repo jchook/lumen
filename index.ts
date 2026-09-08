@@ -1,9 +1,11 @@
-import index from "./src/web/index.html";
+import v2 from "./src/web2/index.html";
+import v1 from "./src/web/index.html";
 
 const server = Bun.serve({
   port: Number(process.env.PORT ?? 3000),
   routes: {
-    "/": index,
+    "/": v2,
+    "/v1": v1,
   },
   development: {
     hmr: true,
@@ -11,4 +13,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`LUMEN → ${server.url}`);
+console.log(`LUMEN → ${server.url}   (v1 at ${server.url}v1)`);

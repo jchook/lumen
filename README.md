@@ -33,7 +33,11 @@ light is finite; more lumens when it is gone wins. `search()` is alpha-beta nega
 | depth 1 vs 4       | 75%         |
 
 Leader at ply 12 wins 83% (depth-3 self-play). First mover wins 42%. In 87% of positions the top two
-moves are within 3 lumens of each other. No renderer yet.
+moves are within 3 lumens of each other.
+
+v2 is the default page (`src/web2/`); the v1 game is served at `/v1`. Difficulty is search depth:
+level N means Umbra thinks N plies ahead. Hover shows your move's full consequence (it is a
+perfect-information game, so this is not a cheat); space or the button holds position.
 
 ## Layout
 
