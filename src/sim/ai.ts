@@ -20,7 +20,7 @@ export function chooseTarget(state: GameState, actorId: number, cfg: SimConfig):
   const actor = playerById(state, actorId);
   if (!actor || !actor.alive) return null;
   const others = alivePlayers(state).filter((p) => p !== actor);
-  const preyBefore = others.filter((p) => canEat(actor, p, cfg));
+  const preyBefore = others.filter((p) => canEat(actor, p));
   const nearestPreyGap = preyBefore.length ? Math.min(...preyBefore.map((p) => gap(actor, p))) : null;
   let bestId: number | null = null;
   let best = -Infinity;
@@ -37,19 +37,19 @@ export function chooseTarget(state: GameState, actorId: number, cfg: SimConfig):
     // Contest: if someone who can eat this orb would get there first, it's probably not ours.
     const myEta = eta(actor, t, cfg);
     for (const p of others) {
-      if (canEat(p, t, cfg) && inRange(p, t, cfg) && eta(p, t, cfg) < myEta) {
+      if (canEat(p, t) && inRange(p, t, cfg) && eta(p, t, cfg) < myEta) {
         v = Math.min(v, 0) - 0.5;
         break;
       }
     }
     // Hunt: reward closing the gap to the nearest smaller player.
     if (nearestPreyGap !== null) {
-      const prey = alivePlayers(trial).filter((p) => p !== me && canEat(me, p, cfg));
+      const prey = alivePlayers(trial).filter((p) => p !== me && canEat(me, p));
       if (prey.length) v += 0.04 * (nearestPreyGap - Math.min(...prey.map((p) => gap(me, p))));
     }
     // Danger: anything bigger than me that could reach me next move.
     for (const p of alivePlayers(trial)) {
-      if (p === me || !canEat(p, me, cfg)) continue;
+      if (p === me || !canEat(p, me)) continue;
       const d = gap(p, me);
       const strike = reach(p, cfg) + 30;
       if (d < strike) v -= 80 * (1 - d / strike);

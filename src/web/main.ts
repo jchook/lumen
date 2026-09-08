@@ -2,6 +2,7 @@ import {
   GUST,
   ORB,
   VOID,
+  lumens,
   defaultConfig,
   effectiveSpeed,
   human,
@@ -57,7 +58,6 @@ const SLIDERS: SliderSpec[] = [
   { key: "maxTravel", min: 10, max: 400, step: 5, label: "max travel" },
   { key: "drift", min: 0, max: 1, step: 0.01, label: "drift (momentum)" },
   { key: "inertia", min: 0, max: 1.5, step: 0.05, label: "inertia (heavy orbs move less)" },
-  { key: "eatMargin", min: 0, max: 0.5, step: 0.01, label: "eat margin (size edge to absorb)" },
   { key: "playerDrag", min: 0, max: 1, step: 0.05, label: "player drag" },
   { key: "playerPull", min: 0, max: 3, step: 0.05, label: "player pull / 10px" },
   { key: "voidPull", min: 0, max: 3, step: 0.05, label: "void pull" },
@@ -296,7 +296,7 @@ function startGame(newSeed: number): void {
 
 function updateHud(): void {
   const me = human(state);
-  elLight.textContent = String(Math.max(0, Math.round(me.light)));
+  elLight.textContent = `${Math.max(0, Math.floor(me.light))} lumens`;
   elScore.textContent = `score ${me.score}`;
   elTurn.textContent = `round ${state.turn} · speed ${effectiveSpeed(me, cfg).toFixed(2)}`;
   const rate = spawnRate(state.turn, cfg);
@@ -401,7 +401,7 @@ function applyEvents(events: SimEvent[]): void {
         break;
       case "blackout":
         endReason = e.reason;
-        endBy = e.byPlayer ? e.byPlayer.name : e.by ? `a ${ORB[e.by.kind].name}` : "";
+        endBy = e.byPlayer ? e.byPlayer.name : e.by ? `${ORB[e.by.kind].name} (${lumens(e.by)} lumens)` : "";
         shake = e.reason === "absorbed" || e.reason === "eaten" ? 16 : 4;
         flash = e.reason === "absorbed" || e.reason === "eaten" ? 1 : 0.3;
         burst(e.at.x, e.at.y, e.byPlayer ? playerColor(e.byPlayer).glow : COLOR[e.by?.kind ?? VOID].glow, 60, null);
@@ -764,14 +764,13 @@ function frame(now: number): void {
   ctx.globalCompositeOperation = "lighter";
   drawPreview();
   const meNow = human(state);
-  const myR = meNow.radius;
   const myReach = reach(meNow, cfg);
   for (const s of sprites.values()) {
     const far = Math.hypot(s.tx - meNow.x, s.ty - meNow.y) > myReach;
     s.alpha = far ? 0.45 : 1;
-    drawOrb(s, t, s.radius > myR);
+    drawOrb(s, t, lumens(s) > meNow.light);
   }
-  for (const s of players.values()) if (s.ai) drawPlayer(s, t, s.radius > myR);
+  for (const s of players.values()) if (s.ai) drawPlayer(s, t, s.light > meNow.light);
   const me = players.get(human(state).id);
   if (me) drawPlayer(me, t, false);
   if (cfg.maxJump > 0 && state.status === "playing") {
@@ -779,7 +778,7 @@ function frame(now: number): void {
     for (const p of state.players) {
       if (!p.alive) continue;
       const mine = !p.ai;
-      if (!mine && p.radius <= human(state).radius) continue;
+      if (!mine && p.light <= human(state).light) continue;
       const c = playerColor(p);
       ctx.strokeStyle = `rgba(${c.glow},${mine ? 0.14 : 0.1})`;
       ctx.lineWidth = 1;

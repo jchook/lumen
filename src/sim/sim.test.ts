@@ -12,6 +12,7 @@ import {
   grownRadius,
   human,
   inertia,
+  lumens,
   makeOrb,
   newGame,
   playerById,
@@ -27,13 +28,13 @@ import {
   type SimConfig,
 } from "./index";
 
-// Hold 50 light (r ≈ 20.6): bigger than a star (r20), smaller than a void (r26). No spawns, no travel cost, no rivals.
+// Hold 15 lumens: more than a star (10), fewer than a void (20). No spawns, no travel cost, no rivals.
 const cfg: SimConfig = {
   ...defaultConfig,
   spawnPerTurn: 0,
   initialOrbs: 0,
   travelCost: 0,
-  startLight: 50,
+  startLight: 15,
   opponents: 0,
   maxJump: 0,
   gustChance: 0,
@@ -163,7 +164,7 @@ describe("step (single player)", () => {
     const { state, events } = step(s, s.orbs[0]!.id, cfg);
     expect(events.some((e) => e.type === "swallow")).toBe(true);
     const v = state.orbs.find((o) => o.kind === VOID)!;
-    expect(v.stored).toBe(ORB[EMBER].value);
+    expect(v.stored).toBe(2 * ORB[STAR].value + ORB[EMBER].value);
     expect(v.radius).toBeCloseTo(grownRadius(ORB[VOID].radius, ORB[EMBER].radius, cfg));
   });
 
@@ -179,7 +180,7 @@ describe("step (single player)", () => {
   });
 
   test("a big enough player eats a void and claims what it banked", () => {
-    const rich: SimConfig = { ...cfg, startLight: 130 }; // r ≈ 27 > void 26
+    const rich: SimConfig = { ...cfg, startLight: 30 }; // more lumens than a void holding 25
     const s = board([[500, 400, VOID], [780, 780, SPARK]], rich);
     s.orbs[0]!.stored = 25;
     const { state, events } = step(s, s.orbs[0]!.id, rich);
@@ -196,7 +197,8 @@ describe("step (single player)", () => {
     expect(events.filter((e) => e.type === "collect" && e.by === "overlap")).toHaveLength(1);
   });
 
-  test("anything bigger than you absorbs you, whether you tap it or it is pulled onto you", () => {
+  test("anything with more lumens than you absorbs you, whether you tap it or it is pulled onto you", () => {
+    expect(lumens(makeOrb(newGame(1, cfg), 0, 0, VOID))).toBe(2 * ORB[STAR].value);
     const tapVoid = board([[400, 400, VOID]]);
     const t = step(tapVoid, tapVoid.orbs[0]!.id, cfg);
     expect(t.state.status).toBe("over");
@@ -205,9 +207,12 @@ describe("step (single player)", () => {
     const pulled = board([[400, 400, STAR], [400, 460, VOID]]);
     expect(step(pulled, pulled.orbs[0]!.id, cfg).state.status).toBe("over");
 
-    const small: SimConfig = { ...cfg, startLight: 10 }; // r ≈ 14.7 < star 20
+    const small: SimConfig = { ...cfg, startLight: 5 }; // fewer lumens than a star
     const fresh = board([[600, 400, STAR]], small);
     expect(step(fresh, fresh.orbs[0]!.id, small).state.status).toBe("over");
+    const exact: SimConfig = { ...cfg, startLight: 10 }; // an orb worth exactly your light is still food
+    const tie = board([[600, 400, STAR], [780, 780, SPARK]], exact);
+    expect(step(tie, tie.orbs[0]!.id, exact).state.status).toBe("playing");
   });
 
   test("gusts add speed, and speed extends reach", () => {
@@ -329,7 +334,7 @@ describe("opponents", () => {
     expect(playerById(state, rival.id)!.y).toBeGreaterThan(startY);
   });
 
-  test("the bigger player eats the smaller on contact and takes their light", () => {
+  test("the light with more lumens eats the other on contact, takes their light, and wins", () => {
     const s = board([], vs);
     const me = human(s);
     me.light = 100;
@@ -343,7 +348,7 @@ describe("opponents", () => {
     expect(state.status).toBe("won");
   });
 
-  test("landing next to a bigger opponent gets you eaten", () => {
+  test("landing next to an opponent with more lumens gets you eaten", () => {
     const s = board([], vs);
     const rival = s.players[1]!;
     rival.light = 100;
@@ -354,7 +359,7 @@ describe("opponents", () => {
     expect(events.at(-1)).toMatchObject({ type: "blackout", reason: "eaten" });
   });
 
-  test("two equal lights meeting is a draw; near-equal lights bounce", () => {
+  test("two equal lights meeting is a draw; one lumen more is enough to absorb", () => {
     const s = board([], vs);
     const rival = s.players[1]!;
     s.orbs.push(makeOrb(s, rival.x + 5, rival.y, GUST)); // worth nothing, so light stays equal
@@ -362,15 +367,14 @@ describe("opponents", () => {
     expect(r.state.status).toBe("draw");
     expect(r.events.some((e) => e.type === "draw")).toBe(true);
 
-    const near = board([[780, 780, SPARK]], vs);
-    const rival2 = near.players[1]!;
-    rival2.light = vs.startLight - 2; // a hair smaller: inside the margin
+    const edge = board([[780, 780, SPARK]], vs);
+    const rival2 = edge.players[1]!;
+    rival2.light = vs.startLight - 1;
     rival2.radius = playerRadius(rival2.light, vs);
-    near.orbs.push(makeOrb(near, rival2.x + 5, rival2.y, GUST));
-    const r2 = step(near, near.orbs[1]!.id, vs);
-    expect(r2.state.status).toBe("playing");
-    expect(playerById(r2.state, rival2.id)!.alive).toBe(true);
-    expect(r2.events.some((e) => e.type === "eat")).toBe(false);
+    edge.orbs.push(makeOrb(edge, rival2.x + 5, rival2.y, GUST));
+    const r2 = step(edge, edge.orbs[1]!.id, vs);
+    expect(r2.events.some((e) => e.type === "eat")).toBe(true);
+    expect(r2.state.status).toBe("won");
   });
 
   test("players are never tap targets", () => {

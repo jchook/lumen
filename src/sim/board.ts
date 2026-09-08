@@ -1,5 +1,5 @@
 import { nextRandom } from "./rng";
-import { GUST, ORB, type GameState, type Orb, type OrbKind, type Player, type SimConfig } from "./types";
+import { GUST, ORB, STAR, VOID, type GameState, type Orb, type OrbKind, type Player, type SimConfig } from "./types";
 
 /** Spawn weights for light orbs (gusts roll separately). */
 const KIND_WEIGHTS: ReadonlyArray<[OrbKind, number]> = [
@@ -50,7 +50,9 @@ export function spawnRate(turn: number, cfg: SimConfig): number {
 }
 
 export function makeOrb(state: GameState, x: number, y: number, kind: OrbKind): Orb {
-  return { id: state.nextId++, x, y, kind, radius: ORB[kind].radius, dx: 0, dy: 0, swallowed: 0, stored: 0 };
+  // A void is two stars' worth of light folded into the dark.
+  const stored = kind === VOID ? 2 * ORB[STAR].value : 0;
+  return { id: state.nextId++, x, y, kind, radius: ORB[kind].radius, dx: 0, dy: 0, swallowed: 0, stored };
 }
 
 /** A void that has eaten `prey` grows by area. */

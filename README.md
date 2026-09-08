@@ -29,15 +29,16 @@ bun run build      # static bundle in dist/
 | spark | +1    | ember      |                                         |
 | ember | +3    | star       | shows its number                        |
 | star  | +10   | **void**   | bigger than a young light: it eats you  |
-| void  | banked| —          | swallows, grows, merges; eat it to cash |
+| void  | 20+   | —          | swallows, grows, merges; eat it to cash |
 | gust  | +0    | —          | +speed                                  |
 
 - **One verb.** Tap an orb within reach. You jump there and absorb it. Every collection pulls the
   whole board toward that point, other players included. Heavy orbs move less (inertia).
-- **The bigger light absorbs the smaller.** Any orb bigger than you eats you on contact. Players are
-  never tap targets: you absorb an opponent only by contact, and only with a clear size edge
-  (`eatMargin`, so early on you need roughly 4× their light, late game under 2×). Near-equal lights
-  bounce; exactly equal lights meeting you is a draw.
+- **Lumens decide who absorbs whom.** Every orb is worth lumens (a void carries the two stars that made
+  it plus everything it swallowed) and every light holds lumens. On contact, more lumens absorbs fewer.
+  An orb worth up to your lumens is food; one worth more eats you. Players are never tap targets: you
+  absorb an opponent only by contact, with even one lumen more. Equal lumens meeting you is a draw.
+  Whether you can take an orb is decided as you leave; the trip can still fade you.
 - **Light is fuel, score and size.** Travel costs light by distance and radius. Below zero you fade.
   Radius grows with light held. Everyone starts tiny (3 light) and on equal footing.
 - **Speed and reach.** Effective speed = gust boosts × √(base / radius). Reach = `maxJump` × speed.

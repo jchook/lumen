@@ -29,6 +29,11 @@ export const ORB: Readonly<Record<OrbKind, OrbStats>> = {
   5: { name: "gust", value: 0, mass: 0.6, radius: 7 },
 };
 
+/** Lumens an orb carries: its worth, plus whatever a void has banked. This decides who absorbs whom. */
+export function lumens(o: { kind: OrbKind; stored: number }): number {
+  return ORB[o.kind].value + o.stored;
+}
+
 export interface Orb {
   id: number;
   x: number;
@@ -41,7 +46,7 @@ export interface Orb {
   dy: number;
   /** Voids only: orbs swallowed so far. */
   swallowed: number;
-  /** Voids only: light banked from what it swallowed. Eat the void to claim it. */
+  /** Voids only: light banked, starting with the two stars that made it. Eat the void to claim it. */
   stored: number;
 }
 
@@ -119,8 +124,6 @@ export interface SimConfig {
   voidAppetite: number;
   /** Number of computer opponents. Absorb them all to win. */
   opponents: number;
-  /** How much bigger (radius ratio) a light must be to absorb another light. Closer than that, they bounce. */
-  eatMargin: number;
   /** How strongly collections drag other players, relative to orbs (0–1). */
   playerDrag: number;
   /** Reach of a jump at base size and speed 1 (px); actual reach scales with effective speed. 0 = unlimited. */
@@ -148,7 +151,6 @@ export const defaultConfig: SimConfig = {
   travelCost: 1,
   voidAppetite: 2,
   opponents: 1,
-  eatMargin: 0.2,
   playerDrag: 0.5,
   maxJump: 240,
 };

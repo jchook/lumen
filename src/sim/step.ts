@@ -16,6 +16,7 @@ import {
   GUST,
   ORB,
   VOID,
+  lumens,
   type EndReason,
   type GameState,
   type Orb,
@@ -126,7 +127,7 @@ function resolveFusions(state: GameState, cfg: SimConfig, events: SimEvent[]): v
       const result = makeOrb(state, (a.x + b.x) / 2, (a.y + b.y) / 2, VOID);
       result.radius = Math.sqrt(a.radius ** 2 + b.radius ** 2);
       result.swallowed = a.swallowed + b.swallowed;
-      result.stored = a.stored + b.stored;
+      result.stored = a.stored + b.stored; // both voids' banks, nothing double counted
       result.dx = (a.dx + b.dx) / 2;
       result.dy = (a.dy + b.dy) / 2;
       state.orbs.splice(j, 1);
@@ -161,9 +162,7 @@ function resolveFusions(state: GameState, cfg: SimConfig, events: SimEvent[]): v
 }
 
 /** Light an orb is worth when a player absorbs it. Voids hand over everything they banked. */
-function worth(o: Orb): number {
-  return ORB[o.kind].value + o.stored;
-}
+const worth = lumens;
 
 function absorbOrb(state: GameState, p: Player, orb: Orb, by: "tap" | "overlap", cfg: SimConfig, events: SimEvent[]): void {
   state.orbs.splice(state.orbs.indexOf(orb), 1);
@@ -205,8 +204,7 @@ function eat(state: GameState, predator: Player, prey: Player, cfg: SimConfig, e
 }
 
 /**
- * Players touching players: a clearly bigger light absorbs the smaller (see eatMargin).
- * Exactly equal lights: a draw if one is you. Near-equal: they bounce.
+ * Players touching players: more lumens absorbs fewer. Equal lumens: a draw if one is you, else a bounce.
  */
 function resolvePlayers(state: GameState, cfg: SimConfig, events: SimEvent[]): void {
   for (let iter = 0; iter < 16; iter++) {
@@ -217,16 +215,16 @@ function resolvePlayers(state: GameState, cfg: SimConfig, events: SimEvent[]): v
         const a = ps[i]!;
         const b = ps[j]!;
         if (!touching(a, b)) continue;
-        if (Math.abs(a.radius - b.radius) < 1e-6 && (a === human(state) || b === human(state))) {
-          state.status = "draw";
-          events.push({ type: "draw", a: { ...a }, b: { ...b } });
-          return;
-        }
-        if (!canEat(a, b, cfg) && !canEat(b, a, cfg)) {
+        if (Math.abs(a.light - b.light) < 1e-9) {
+          if (a === human(state) || b === human(state)) {
+            state.status = "draw";
+            events.push({ type: "draw", a: { ...a }, b: { ...b } });
+            return;
+          }
           separate(a, b);
           continue;
         }
-        const [big, small] = a.radius > b.radius ? [a, b] : [b, a];
+        const [big, small] = a.light > b.light ? [a, b] : [b, a];
         eat(state, big, small, cfg, events);
         acted = true;
         break outer;
@@ -243,7 +241,7 @@ function resolvePlayerOrbs(state: GameState, cfg: SimConfig, events: SimEvent[])
     for (let iter = 0; iter < 64; iter++) {
       const orb = state.orbs.find((o) => touching(o, p));
       if (!orb) break;
-      if (orb.radius > p.radius) {
+      if (!canEat(p, orb)) {
         eliminate(state, p, "absorbed", events, { ...orb });
         break;
       }
@@ -252,9 +250,12 @@ function resolvePlayerOrbs(state: GameState, cfg: SimConfig, events: SimEvent[])
   }
 }
 
-/** Can this player absorb that body on contact? Orbs of equal size are food; players need a clear size edge. */
-export function canEat(actor: Player, target: { radius: number; ai?: boolean }, cfg: SimConfig): boolean {
-  return "ai" in target ? target.radius * (1 + cfg.eatMargin) < actor.radius : target.radius <= actor.radius;
+/**
+ * Can this player absorb that body on contact? Lumens decide: an orb worth up to your light is food,
+ * and a player with fewer lumens than you is prey. Equal lumens between players is a draw or a bounce.
+ */
+export function canEat(actor: Player, target: Orb | Player): boolean {
+  return "ai" in target ? target.light < actor.light : lumens(target) <= actor.light;
 }
 
 /** Is this jump within the actor's reach? */
@@ -269,7 +270,7 @@ export function inRange(actor: Player, target: { x: number; y: number }, cfg: Si
 export function edibleTargets(state: GameState, actorId: number, cfg: SimConfig): Orb[] {
   const actor = playerById(state, actorId);
   if (!actor || !actor.alive) return [];
-  return state.orbs.filter((o) => canEat(actor, o, cfg) && inRange(actor, o, cfg));
+  return state.orbs.filter((o) => canEat(actor, o) && inRange(actor, o, cfg));
 }
 
 // ---------- round phases ----------
@@ -324,6 +325,8 @@ export function arrive(state: GameState, intent: Intent, cfg: SimConfig, events:
       dest = { x: actor.x + ((intent.x - actor.x) / (full || 1)) * short, y: actor.y + ((intent.y - actor.y) / (full || 1)) * short };
     }
   }
+  // Whether you can take it is decided as you leave; the trip itself may still fade you.
+  const edible = orb ? canEat(actor, orb) : false;
   const dist = Math.hypot(dest.x - actor.x, dest.y - actor.y);
   const cost = travelCost(dist, actor.radius, cfg);
   actor.light -= cost;
@@ -334,7 +337,7 @@ export function arrive(state: GameState, intent: Intent, cfg: SimConfig, events:
     events.push({ type: "miss", actor: actor.id, orbId: intent.orbId, at: { x: intent.x, y: intent.y } });
     return;
   }
-  if (orb.radius > actor.radius) {
+  if (!edible) {
     eliminate(state, actor, "absorbed", events, { ...orb });
     return;
   }
