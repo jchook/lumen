@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, predict, radiusOf, step, type Config, type State } from "./index";
+import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, predict, radiusOf, step, type Config, type State } from "./index";
 import { botTurn, decide } from "./bots";
 
 const cfg: Config = { ...defaultConfig };
@@ -48,7 +48,7 @@ describe("gravity", () => {
   });
   test("a heavy light attracts", () => {
     const s = empty();
-    add(s, "light", 1000, 1000, cfg.gravityMass + 10, { name: "big", ai: true });
+    add(s, "light", 1000, 1000, cfg.lightGravityMass + 10, { name: "big", ai: true });
     const o = add(s, "orb", 1300, 1000, 1);
     run(s, 2);
     expect(o.x).toBeLessThan(1300);
@@ -92,8 +92,9 @@ describe("burn", () => {
     const pb = add(b, "light", 500, 500, 10, { name: "You" });
     burn(a, pa.id, 1, 0, 1, cfg);
     burn(b, pb.id, 1, 0, 0.01, cfg);
-    expect(10 - pa.mass).toBeCloseTo(10 * cfg.burnFraction, 9);
-    expect(10 - pb.mass).toBeCloseTo(10 * cfg.burnFraction * 0.15, 9);
+    const ag = agility(10, cfg);
+    expect(10 - pa.mass).toBeCloseTo(10 * cfg.burnFraction * ag, 9);
+    expect(10 - pb.mass).toBeCloseTo(10 * cfg.burnFraction * 0.15 * ag, 9);
   });
   test("too small to burn", () => {
     const s = empty();
@@ -170,6 +171,25 @@ describe("absorb", () => {
     add(s, "orb", 500 + radiusOf(10, cfg), 500, 5, { vx: -100 });
     run(s, 0.05);
     expect(big.vx).toBeLessThan(0);
+  });
+});
+
+describe("agility", () => {
+  test("a small light gets more from a burn than a big one", () => {
+    const a = empty();
+    const b = empty();
+    const small = add(a, "light", 500, 500, cfg.startMass, { name: "You" });
+    const big = add(b, "light", 500, 500, cfg.startMass * 9, { name: "You" });
+    burn(a, small.id, 1, 0, 1, cfg);
+    burn(b, big.id, 1, 0, 1, cfg);
+    expect(small.vx).toBeGreaterThan(big.vx * 1.5);
+  });
+  test("a heavy light doesn't attract until lightGravityMass", () => {
+    const s = empty();
+    add(s, "light", 1000, 1000, cfg.gravityMass + 5, { name: "big", ai: true });
+    const o = add(s, "orb", 1200, 1000, 1);
+    run(s, 2);
+    expect(o.x).toBe(1200);
   });
 });
 

@@ -3,7 +3,7 @@
  * in, chase a lighter body when its mass beats the burns it will take to reach it, otherwise coast
  * and let gravity do the work. Every burn is paid in mass, so the price is always computed first.
  */
-import { byId, delta, predict, radiusOf, type Body, type Config, type State } from "./index";
+import { burnDeltaV, byId, delta, predict, radiusOf, type Body, type Config, type State } from "./index";
 
 export interface Intent {
   dx: number;
@@ -24,7 +24,7 @@ export interface BotStyle {
   horizon: number;
 }
 
-export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.6, think: 0.35, horizon: 3 };
+export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 3 };
 
 /** What a bot remembers between decisions: the body it's committed to and what it has paid so far. */
 export interface Memory {
@@ -33,11 +33,12 @@ export interface Memory {
 }
 export type Memories = Map<number, Memory>;
 
-/** Δv one full burn buys, px/s. Independent of mass. */
-export const burnDv = (cfg: Config): number => (cfg.ejectSpeed * cfg.burnFraction) / (1 - cfg.burnFraction);
-
-/** Mass spent on `n` full burns from `mass`. */
-export const burnCost = (mass: number, n: number, cfg: Config): number => mass * (1 - Math.pow(1 - cfg.burnFraction, n));
+/** Mass spent on `n` full burns from `mass` (agility included). */
+export function burnCost(mass: number, n: number, cfg: Config): number {
+  let m = mass;
+  for (let i = 0; i < n; i++) m -= m * cfg.burnFraction * Math.min(cfg.agilityMax, Math.max(cfg.agilityMin, Math.sqrt(cfg.startMass / Math.max(0.01, m))));
+  return mass - m;
+}
 
 export function decide(s: State, id: number, cfg: Config, style: BotStyle = defaultStyle, mem: Memories = new Map()): Intent | null {
   const b = byId(s, id);
@@ -87,7 +88,7 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
   // Chase: predict both paths under gravity and aim at the point of closest approach. Commit to a
   // target until it's eaten or it has cost more than it's worth, so mass isn't dribbled away on
   // second thoughts.
-  const dv = burnDv(cfg);
+  const dv = burnDeltaV(b.mass, 1, cfg);
   const m = mem.get(id);
   const committed = m ? byId(s, m.target) : undefined;
   const stillWorth = committed && committed.alive && committed.mass < b.mass && m!.spent < committed.mass / style.greed;

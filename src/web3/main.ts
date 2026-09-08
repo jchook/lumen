@@ -1,5 +1,6 @@
 import {
   burn,
+  burnDeltaV,
   defaultConfig,
   delta,
   dist,
@@ -350,6 +351,36 @@ function glow(x: number, y: number, r: number, hue: string, inner = 1, halo = 2.
   ctx.fill();
 }
 
+function drawPoints(from: { x: number; y: number }, p: Array<{ x: number; y: number }>, colour: string, width = 1, dash: number[] = [3, 5]): void {
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = width;
+  ctx.setLineDash(dash);
+  ctx.beginPath();
+  let [px, py] = toScreen(from.x, from.y);
+  ctx.moveTo(px, py);
+  for (const q of p) {
+    const [x, y] = toScreen(q.x, q.y);
+    if (Math.abs(x - px) > W / 2 || Math.abs(y - py) > H / 2) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+    px = x;
+    py = y;
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+/** My path if I burn toward the cursor right now. */
+function burnPreview(me: Body): Array<{ x: number; y: number }> | null {
+  const [sx, sy] = toScreen(me.x, me.y);
+  const dx = pointer.x - sx;
+  const dy = pointer.y - sy;
+  const d = Math.hypot(dx, dy);
+  if (d < 6) return null;
+  const dv = burnDeltaV(me.mass, d / BURN_RANGE, cfg);
+  const ghost: Body = { ...me, vx: me.vx + (dx / d) * dv, vy: me.vy + (dy / d) * dv };
+  return predict(state, ghost, cfg, 4, 0.1);
+}
+
 function drawPath(b: Body, alpha: number): void {
   const p = predict(state, b, cfg, 4, 0.1);
   ctx.strokeStyle = `hsla(${identity(b)} / ${alpha})`;
@@ -406,7 +437,13 @@ function draw(dt: number): void {
 
   // Paths first, under everything.
   if (showAll.checked) for (const l of lights(state)) if (l !== me) drawPath(l, 0.25);
-  if (showPath.checked && me.alive) drawPath(me, 0.5);
+  if (showPath.checked && me.alive) drawPath(me, 0.35);
+  // Where a click would take me: brighter than the drift path, so the choice is visible before it's made.
+  let ghost: Array<{ x: number; y: number }> | null = null;
+  if (showPath.checked && me.alive && pointer.inside && state.status === "playing") {
+    ghost = burnPreview(me);
+    if (ghost) drawPoints(me, ghost, `hsla(${identity(me)} / 0.85)`, 1.5, [6, 4]);
+  }
 
   // Bodies, big first so lights and orbs sit on top of sun halos.
   const bodies = state.bodies.filter((b) => b.alive).sort((a, b) => b.mass - a.mass);
@@ -490,6 +527,43 @@ function draw(dt: number): void {
     if (hit) {
       const b = hit.b;
       const verdict = b.mass > me.mass ? "absorbs you" : b.mass < me.mass ? "food" : "equal";
+      // Its path, and where my burn path comes closest to it. Green when that's a catch.
+      if (b.kind !== "orb" || !b.anchored) {
+        const theirs = predict(state, b, cfg, 4, 0.1);
+        drawPoints(b, theirs, `hsla(${hueOf(b, me)} / 0.6)`, 1, [2, 4]);
+        const mine = ghost ?? predict(state, me, cfg, 4, 0.1);
+        const reach = radiusOf(b.mass, cfg) + radiusOf(me.mass, cfg);
+        let best = Infinity;
+        let at = -1;
+        for (let i = 0; i < mine.length && i < theirs.length; i++) {
+          const [dx, dy] = delta(mine[i]!.x, mine[i]!.y, theirs[i]!.x, theirs[i]!.y, cfg);
+          const g = Math.hypot(dx, dy) - reach;
+          if (g < best) {
+            best = g;
+            at = i;
+          }
+        }
+        if (at >= 0) {
+          const caught = best <= 0;
+          const [mx, my] = toScreen(mine[at]!.x, mine[at]!.y);
+          const [tx, ty] = toScreen(theirs[at]!.x, theirs[at]!.y);
+          ctx.strokeStyle = caught ? "hsla(140 80% 60% / 0.9)" : "hsla(0 0% 100% / 0.35)";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(mx, my);
+          ctx.lineTo(tx, ty);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(tx, ty, Math.max(3, radiusOf(b.mass, cfg) * z), 0, Math.PI * 2);
+          ctx.stroke();
+          if (caught) {
+            ctx.fillStyle = "hsla(140 80% 60% / 0.9)";
+            ctx.font = "11px ui-monospace, Menlo, monospace";
+            ctx.fillText(`${((at + 1) * 0.1).toFixed(1)}s`, tx, ty - Math.max(3, radiusOf(b.mass, cfg) * z) - 6);
+          }
+        }
+      }
       ctx.font = "12px ui-monospace, Menlo, monospace";
       ctx.textAlign = "center";
       ctx.fillStyle = `hsla(${hueOf(b, me)} / 0.95)`;

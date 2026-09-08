@@ -55,8 +55,13 @@ export interface Config {
   G: number;
   /** Plummer softening, px. */
   soft: number;
-  /** Bodies at or above this mass attract. */
+  /** Orbs at or above this mass attract. */
   gravityMass: number;
+  /** Lights only attract from here: growing doesn't hand you a vacuum cleaner. */
+  lightGravityMass: number;
+  /** Burns scale by √(startMass / mass), clamped: small lights are nimble, giants are sluggish. */
+  agilityMin: number;
+  agilityMax: number;
   maxAccel: number;
   maxSpeed: number;
   /** radius = radiusScale · √mass + radiusFloor, so specks are still catchable. */
@@ -91,6 +96,9 @@ export const defaultConfig: Config = {
   G: 2200,
   soft: 40,
   gravityMass: 30,
+  lightGravityMass: 90,
+  agilityMin: 0.4,
+  agilityMax: 1.25,
   maxAccel: 500,
   maxSpeed: 400,
   radiusScale: 4,
@@ -158,7 +166,19 @@ const wrap = (v: number, n: number): number => ((v % n) + n) % n;
 export const human = (s: State): Body => s.bodies.find((b) => b.kind === "light" && !b.ai)!;
 export const lights = (s: State): Body[] => s.bodies.filter((b) => b.kind === "light" && b.alive);
 export const byId = (s: State, id: number): Body | undefined => s.bodies.find((b) => b.id === id);
-export const attractors = (s: State, cfg: Config): Body[] => s.bodies.filter((b) => b.mass >= cfg.gravityMass);
+export const attracts = (b: Body, cfg: Config): boolean => b.alive && b.mass >= (b.kind === "light" ? cfg.lightGravityMass : cfg.gravityMass);
+export const attractors = (s: State, cfg: Config): Body[] => s.bodies.filter((b) => attracts(b, cfg));
+
+/** How much of a full burn a light of this mass actually gets. */
+export const agility = (mass: number, cfg: Config): number =>
+  Math.min(cfg.agilityMax, Math.max(cfg.agilityMin, Math.sqrt(cfg.startMass / Math.max(0.01, mass))));
+
+/** Δv a burn of `strength` gives a light of `mass`, px/s. */
+export function burnDeltaV(mass: number, strength: number, cfg: Config): number {
+  const k = Math.min(1, Math.max(0.15, strength));
+  const f = cfg.burnFraction * k * agility(mass, cfg);
+  return (cfg.ejectSpeed * f) / (1 - f);
+}
 
 function makeBody(s: State, kind: Kind, x: number, y: number, mass: number, extra: Partial<Body> = {}): Body {
   const b: Body = {
@@ -288,7 +308,7 @@ export function burn(s: State, id: number, dx: number, dy: number, strength: num
   const len = Math.hypot(dx, dy);
   if (len < 1e-6) return false;
   const k = Math.min(1, Math.max(0.15, strength));
-  const f = cfg.burnFraction * k;
+  const f = cfg.burnFraction * k * agility(b.mass, cfg);
   const m = b.mass * f;
   if (b.mass - m < cfg.minBurnMass) return false;
   const ux = dx / len;
