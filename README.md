@@ -132,12 +132,13 @@ The turn-based versions are tagged `v0.2-turnbased` and still served at `/v2` an
 **Rules.** A torus arena of bodies at every scale: specks, morsels, a few middleweights that roam,
 and a few giants. Every body carries lumens (its mass); radius is √mass so area is mass. Bodies
 above `gravityMass` bend space: everything falls toward them with softened Newtonian gravity and
-keeps its momentum, so the small orbit the large. You move by burning: click or hold toward where
-you want to go. The light throws a fraction of its mass out the back as a new orb and recoils the
-other way. Farther from your light is a stronger burn and a bigger cost. When two bodies overlap,
+keeps its momentum, so the small orbit the large. Tap where you want to go and your light flies
+there; tap something lighter than you and it chases it. Flying is a series of burns: each throws
+a fraction of your mass out the back as a short-lived flare and recoils you the other way, so every
+trip has a price, shown before you tap. Space lets go and you drift. When two bodies overlap,
 lumens flow from the lighter into the heavier at a rate set by the overlap; equal masses trade
 nothing. A body that runs dry is gone. Nothing is permanent: grow past a giant and you can eat it.
-Last light burning wins.
+Last light burning wins. Small lights are nimble; big ones are sluggish, and only very big ones pull.
 
 **Why those rules.** Burns eject real mass so thrust is conservative: every escape leaves food
 behind for the chaser, and moving is visibly expensive. Gravity only from heavy bodies keeps orbits
@@ -146,13 +147,17 @@ deliberate motion rather than noise. Gradual absorption turns grazes into losses
 The torus removes walls and corners. Difficulty is company: more rivals share the arena.
 
 **Reading the screen.** Glow colour is relative to you: red or orange can absorb you, blue-white is
-food, grey is equal. Hover anything to see its lumens. The dotted line is your free-fall path for
-the next four seconds. Chevrons at the screen edge point to heavier things off screen, larger when
-closer. The camera zooms out as you grow and whenever your path comes near something heavier.
+food, grey is equal. Hover anything to see its lumens and what the trip there would cost. The dim
+dotted line is your free-fall path; the bright dashed line is the route the autopilot would fly to
+the cursor, with its price and time. Chevrons at the screen edge point to lights and heavy bodies
+off screen, larger when closer. The camera zooms out as you grow and whenever your path comes near
+something that can pull or chase you. Manual burns (click toward a direction, farther is harder)
+are behind a toggle in the tuning panel.
 
 **Bots.** `src/sim3/bots.ts`: escape a predicted graze with a heavier body by burning prograde,
-chase a lighter body only when its mass beats the burns needed to intercept it along both predicted
-paths, and commit to a target until it is eaten or has cost more than it is worth.
+otherwise rehearse a trip to each lighter body in range with the same autopilot the player uses and
+chase the best one whose mass beats the price, committing until it is eaten or has cost more than it
+is worth. Rivals are only hunted with a clear mass margin.
 
 ```sh
 bun run arena            # bot-only balance sweep

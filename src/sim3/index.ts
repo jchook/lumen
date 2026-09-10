@@ -34,6 +34,17 @@ export interface Body {
   from: number;
   /** Seconds until this light may burn again. */
   cooldown: number;
+  /** Where this light is steering itself, if anywhere. */
+  goal: Goal | null;
+  /** Mass burned on the current goal. */
+  spent: number;
+}
+
+/** A destination: a point, or a body to follow (`follow` > 0). */
+export interface Goal {
+  x: number;
+  y: number;
+  follow: number;
 }
 
 export interface Config {
@@ -81,6 +92,14 @@ export interface Config {
   dust: number;
   /** Exhaust is a flare, not food: its mass halves every this many seconds. */
   exhaustHalfLife: number;
+  /** Autopilot: top speed it steers for, px/s. */
+  cruise: number;
+  /** Autopilot: approach speed per px of remaining distance, so it arrives gently. */
+  approach: number;
+  /** Autopilot: velocity error below which it doesn't bother burning, px/s. */
+  deadband: number;
+  /** Autopilot: a point goal counts as reached inside this many px. */
+  arrive: number;
 }
 
 export const defaultConfig: Config = {
@@ -110,12 +129,17 @@ export const defaultConfig: Config = {
   minBurnMass: 0.5,
   dust: 0.05,
   exhaustHalfLife: 1.2,
+  cruise: 150,
+  approach: 0.9,
+  deadband: 6,
+  arrive: 12,
 };
 
 export type Ev =
   | { type: "absorb"; eater: number; food: number; amount: number }
   | { type: "gone"; id: number; kind: Kind; name: string; by: number }
   | { type: "burn"; id: number; x: number; y: number; dx: number; dy: number; mass: number }
+  | { type: "arrive"; id: number }
   | { type: "win"; id: number }
   | { type: "over" };
 
@@ -195,6 +219,8 @@ function makeBody(s: State, kind: Kind, x: number, y: number, mass: number, extr
     anchored: false,
     from: 0,
     cooldown: 0,
+    goal: null,
+    spent: 0,
     ...extra,
   };
   s.bodies.push(b);
@@ -330,6 +356,161 @@ export function burn(s: State, id: number, dx: number, dy: number, strength: num
   return true;
 }
 
+// ---------- autopilot ----------
+
+interface Mover {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  mass: number;
+}
+
+/**
+ * One control step: the burn (direction and strength) that moves `b`'s velocity toward what it
+ * needs to reach the target, which is moving at (tvx, tvy). Null when it's already close enough.
+ */
+export function steer(b: Mover, tx: number, ty: number, tvx: number, tvy: number, cfg: Config): { dx: number; dy: number; strength: number } | null {
+  const [dx, dy] = delta(b.x, b.y, tx, ty, cfg);
+  const d = Math.hypot(dx, dy);
+  const speed = Math.min(cfg.cruise, cfg.approach * d);
+  const wantX = tvx + (d > 1e-6 ? (dx / d) * speed : 0);
+  const wantY = tvy + (d > 1e-6 ? (dy / d) * speed : 0);
+  const ex = wantX - b.vx;
+  const ey = wantY - b.vy;
+  const e = Math.hypot(ex, ey);
+  if (e < cfg.deadband) return null;
+  const full = burnDeltaV(b.mass, 1, cfg);
+  return { dx: ex, dy: ey, strength: Math.min(1, e / full) };
+}
+
+/** Point a light somewhere, or at something. Null clears it. */
+export function setGoal(s: State, id: number, goal: Goal | null): void {
+  const b = byId(s, id);
+  if (!b || b.kind !== "light") return;
+  b.goal = goal;
+  b.spent = 0;
+}
+
+/** What a goal resolves to right now: position and velocity, or null if it's gone or unsafe. */
+function resolveGoal(s: State, b: Body, cfg: Config): { x: number; y: number; vx: number; vy: number; reach: number } | null {
+  const g = b.goal!;
+  if (!g.follow) return { x: g.x, y: g.y, vx: 0, vy: 0, reach: cfg.arrive };
+  const t = byId(s, g.follow);
+  if (!t || !t.alive || t.mass >= b.mass) return null;
+  return { x: t.x, y: t.y, vx: t.vx, vy: t.vy, reach: radiusOf(t.mass, cfg) + radiusOf(b.mass, cfg) };
+}
+
+function pilot(s: State, cfg: Config, ev: Ev[]): void {
+  for (const b of s.bodies) {
+    if (b.kind !== "light" || !b.alive || !b.goal) continue;
+    const t = resolveGoal(s, b, cfg);
+    if (!t) {
+      b.goal = null;
+      continue;
+    }
+    const d = dist(b, t, cfg);
+    if (!b.goal.follow && d <= t.reach) {
+      b.goal = null;
+      ev.push({ type: "arrive", id: b.id });
+      continue;
+    }
+    if (b.cooldown > 0) continue;
+    const c = steer(b, t.x, t.y, t.vx, t.vy, cfg);
+    if (!c) continue;
+    const before = b.mass;
+    if (burn(s, b.id, c.dx, c.dy, c.strength, cfg, ev)) b.spent += before - b.mass;
+  }
+}
+
+export interface Plan {
+  path: Array<{ x: number; y: number }>;
+  /** Mass the trip burns. */
+  cost: number;
+  /** Whether it gets there within the horizon, and when. */
+  arrives: boolean;
+  t: number;
+  /** The first heavier body the route runs into, if any, and when. */
+  blocked: { id: number; t: number } | null;
+}
+
+/**
+ * Rehearse a goal without touching the world: fly a ghost of `me` with the autopilot for up to
+ * `seconds`, other bodies following their own predicted paths. What the hover preview shows.
+ */
+export function plan(s: State, me: Body, goal: Goal, cfg: Config, seconds = 6, dt = 0.1): Plan {
+  const wells = attractors(s, cfg).filter((w) => w !== me);
+  const target = goal.follow ? byId(s, goal.follow) : undefined;
+  const theirs = target ? predict(s, target, cfg, seconds, dt) : null;
+  const g: Mover & { cooldown: number } = { x: me.x, y: me.y, vx: me.vx, vy: me.vy, mass: me.mass, cooldown: me.cooldown };
+  // Anything heavier than me is a wall, followed along its own predicted path.
+  const walls = s.bodies
+    .filter((b) => b.alive && b !== me && b !== target && b.mass > me.mass && !b.from)
+    .map((b) => ({ r: radiusOf(b.mass, cfg), id: b.id, path: b.anchored ? null : predict(s, b, cfg, seconds, dt), x: b.x, y: b.y }));
+  const path: Plan["path"] = [];
+  let cost = 0;
+  let blocked: Plan["blocked"] = null;
+  const steps = Math.ceil(seconds / dt);
+  for (let i = 0; i < steps; i++) {
+    const tx = theirs ? theirs[Math.min(i, theirs.length - 1)]!.x : goal.x;
+    const ty = theirs ? theirs[Math.min(i, theirs.length - 1)]!.y : goal.y;
+    const tvx = target ? target.vx : 0;
+    const tvy = target ? target.vy : 0;
+    const reach = target ? radiusOf(target.mass, cfg) + radiusOf(g.mass, cfg) : cfg.arrive;
+    if (dist(g, { x: tx, y: ty }, cfg) <= reach) return { path, cost, arrives: true, t: i * dt, blocked };
+    if (!blocked) {
+      const gr = radiusOf(g.mass, cfg);
+      for (const w of walls) {
+        const at = w.path ? w.path[Math.min(i, w.path.length - 1)]! : w;
+        if (dist(g, at, cfg) < w.r + gr) {
+          blocked = { id: w.id, t: i * dt };
+          break;
+        }
+      }
+    }
+    if (g.cooldown <= 0) {
+      const c = steer(g, tx, ty, tvx, tvy, cfg);
+      if (c) {
+        const k = Math.min(1, Math.max(0.15, c.strength));
+        const f = cfg.burnFraction * k * agility(g.mass, cfg);
+        const m = g.mass * f;
+        if (g.mass - m >= cfg.minBurnMass) {
+          const rest = g.mass - m;
+          const dv = (cfg.ejectSpeed * m) / rest;
+          const len = Math.hypot(c.dx, c.dy) || 1;
+          g.vx += (c.dx / len) * dv;
+          g.vy += (c.dy / len) * dv;
+          g.mass = rest;
+          g.cooldown = cfg.burnCooldown;
+          cost += m;
+        }
+      }
+    }
+    g.cooldown -= dt;
+    let ax = 0;
+    let ay = 0;
+    for (const w of wells) {
+      const [dx, dy] = delta(g.x, g.y, w.x, w.y, cfg);
+      const d2 = dx * dx + dy * dy + cfg.soft * cfg.soft;
+      const a = (cfg.G * w.mass) / d2;
+      const d = Math.sqrt(d2);
+      ax += (a * dx) / d;
+      ay += (a * dy) / d;
+    }
+    const mag = Math.hypot(ax, ay);
+    if (mag > cfg.maxAccel) {
+      ax *= cfg.maxAccel / mag;
+      ay *= cfg.maxAccel / mag;
+    }
+    g.vx += ax * dt;
+    g.vy += ay * dt;
+    g.x = wrap(g.x + g.vx * dt, cfg.width);
+    g.y = wrap(g.y + g.vy * dt, cfg.height);
+    path.push({ x: g.x, y: g.y });
+  }
+  return { path, cost, arrives: false, t: seconds, blocked };
+}
+
 // ---------- physics ----------
 
 function gravity(s: State, cfg: Config, dt: number): void {
@@ -428,6 +609,7 @@ function finish(s: State, ev: Ev[]): void {
 /** Advance the world by `dt` seconds. Mutates `s`; returns the events of this step. */
 export function step(s: State, cfg: Config, dt: number, ev: Ev[] = []): Ev[] {
   if (s.status !== "playing") return ev;
+  pilot(s, cfg, ev);
   gravity(s, cfg, dt);
   move(s, cfg, dt, ev);
   absorb(s, cfg, dt, ev);

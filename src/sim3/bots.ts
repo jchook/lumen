@@ -3,7 +3,7 @@
  * in, chase a lighter body when its mass beats the burns it will take to reach it, otherwise coast
  * and let gravity do the work. Every burn is paid in mass, so the price is always computed first.
  */
-import { burnDeltaV, byId, delta, predict, radiusOf, type Body, type Config, type State } from "./index";
+import { byId, delta, plan, predict, radiusOf, setGoal, type Body, type Config, type State } from "./index";
 
 export interface Intent {
   dx: number;
@@ -22,9 +22,11 @@ export interface BotStyle {
   think: number;
   /** Seconds the bot is willing to spend on an intercept. */
   horizon: number;
+  /** Only hunt a rival lighter than mass ÷ margin. */
+  margin: number;
 }
 
-export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 3 };
+export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 5, margin: 1.4 };
 
 /** What a bot remembers between decisions: the body it's committed to and what it has paid so far. */
 export interface Memory {
@@ -40,6 +42,10 @@ export function burnCost(mass: number, n: number, cfg: Config): number {
   return mass - m;
 }
 
+/**
+ * Decide for one light. Escapes come back as a direct burn; chases are handed to the autopilot via
+ * setGoal and return null.
+ */
 export function decide(s: State, id: number, cfg: Config, style: BotStyle = defaultStyle, mem: Memories = new Map()): Intent | null {
   const b = byId(s, id);
   if (!b || !b.alive || b.cooldown > 0) return null;
@@ -82,59 +88,43 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
     const oy = -dy / len;
     const tx = -oy * side;
     const ty = ox * side;
+    setGoal(s, id, null);
+    mem.delete(id);
     return { dx: ox * 0.5 + tx * 0.85, dy: oy * 0.5 + ty * 0.85, strength: 1 };
   }
 
-  // Chase: predict both paths under gravity and aim at the point of closest approach. Commit to a
-  // target until it's eaten or it has cost more than it's worth, so mass isn't dribbled away on
-  // second thoughts.
-  const dv = burnDeltaV(b.mass, 1, cfg);
+  // Chase: rehearse a trip to each lighter body in range with the shared autopilot and keep the
+  // best mass gained after paying for it. Commit until it's eaten or has cost more than it's worth.
   const m = mem.get(id);
-  const committed = m ? byId(s, m.target) : undefined;
-  const stillWorth = committed && committed.alive && committed.mass < b.mass && m!.spent < committed.mass / style.greed;
-  const candidates = stillWorth ? [committed!] : s.bodies;
-  let best: { gain: number; dx: number; dy: number; n: number; id: number } | null = null;
-  for (const o of candidates) {
+  if (b.goal && b.goal.follow) {
+    const t = byId(s, b.goal.follow);
+    if (t && t.alive && t.mass < b.mass && m && b.spent < t.mass / style.greed) {
+      // Still worth it, unless the route now runs through something heavier.
+      const again = plan(s, b, b.goal, cfg, style.horizon, 0.2);
+      if (!again.blocked) return null;
+    }
+    setGoal(s, id, null);
+  }
+  let best: { gain: number; id: number } | null = null;
+  for (const o of s.bodies) {
     if (o === b || !o.alive || o.mass >= b.mass || o.anchored || o.from) continue;
+    // Hunting a rival is only worth it with a clear margin: a close race is lost on burn cost.
+    if (o.kind === "light" && o.mass > b.mass / style.margin) continue;
     const [dx0, dy0] = delta(b.x, b.y, o.x, o.y, cfg);
-    const d0 = Math.hypot(dx0, dy0);
-    if (d0 > style.sense) continue;
-    const reach = myR + radiusOf(o.mass, cfg);
-    const q = predict(s, o, cfg, style.horizon);
-    let miss = Infinity;
-    let at = 0;
-    let mx = 0;
-    let my = 0;
-    for (let i = 0; i < path.length && i < q.length; i++) {
-      const [px, py] = delta(path[i]!.x, path[i]!.y, q[i]!.x, q[i]!.y, cfg);
-      const g = Math.hypot(px, py) - reach;
-      if (g <= miss) {
-        miss = g;
-        at = (i + 1) * 0.1;
-        mx = px;
-        my = py;
-      }
-    }
-    if (miss < 0) {
-      // Free lunch: we're already going to hit it.
-      if (!best || o.mass > best.gain) best = { gain: o.mass, dx: mx, dy: my, n: 0, id: o.id };
-      continue;
-    }
-    const n = Math.ceil((miss + reach * 0.5) / Math.max(0.3, at) / dv);
-    const cost = burnCost(b.mass, n, cfg);
-    const gain = o.mass - cost * style.greed;
+    if (Math.hypot(dx0, dy0) > style.sense) continue;
+    const p = plan(s, b, { x: o.x, y: o.y, follow: o.id }, cfg, style.horizon, 0.2);
+    if (!p.arrives || p.blocked) continue;
+    const gain = o.mass - p.cost * style.greed;
     if (gain <= 0) continue;
-    if (!best || gain > best.gain) best = { gain, dx: mx, dy: my, n, id: o.id };
+    if (!best || gain > best.gain) best = { gain, id: o.id };
   }
   if (!best) {
     mem.delete(id);
     return null;
   }
-  if (!m || m.target !== best.id) mem.set(id, { target: best.id, spent: 0 });
-  if (best.n === 0) return null;
-  const strength = Math.min(1, best.n / 3);
-  mem.get(id)!.spent += b.mass * cfg.burnFraction * Math.max(0.15, strength);
-  return { dx: best.dx, dy: best.dy, strength };
+  mem.set(id, { target: best.id, spent: 0 });
+  setGoal(s, id, { x: 0, y: 0, follow: best.id });
+  return null;
 }
 
 /** Bots think on their own clocks so a hundred lights don't all burn on the same frame. */

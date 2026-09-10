@@ -2,6 +2,8 @@ import {
   burn,
   burnDeltaV,
   defaultConfig,
+  plan,
+  setGoal,
   delta,
   dist,
   human,
@@ -14,6 +16,8 @@ import {
   type Body,
   type Config,
   type Ev,
+  type Goal,
+  type Plan,
   type State,
 } from "../sim3";
 import { botTurn, type Memories } from "../sim3/bots";
@@ -195,7 +199,42 @@ function updateCamera(dt: number): void {
 // ---------- input ----------
 
 const pointer = { x: W / 2, y: H / 2, down: false, inside: false };
-const BURN_RANGE = 220; // screen px for a full-strength burn
+const BURN_RANGE = 220; // screen px for a full-strength manual burn
+const manual = $("manual") as HTMLInputElement;
+
+/** Screen → world, through the camera. */
+function toWorld(sx: number, sy: number): [number, number] {
+  const z = zoom();
+  const x = ((cam.x + (sx - W / 2) / z) % cfg.width + cfg.width) % cfg.width;
+  const y = ((cam.y + (sy - H / 2) / z) % cfg.height + cfg.height) % cfg.height;
+  return [x, y];
+}
+
+/** The body under the cursor, if any (not me). */
+function under(me: Body): Body | null {
+  const z = zoom();
+  let hit: Body | null = null;
+  let hd = Infinity;
+  for (const b of state.bodies) {
+    if (!b.alive || b === me || b.from) continue;
+    const [sx, sy] = toScreen(b.x, b.y);
+    const r = Math.max(10, radiusOf(b.mass, cfg) * z * 1.4);
+    const d = Math.hypot(pointer.x - sx, pointer.y - sy);
+    if (d < r && d < hd) {
+      hit = b;
+      hd = d;
+    }
+  }
+  return hit;
+}
+
+/** What a tap at the cursor means right now. */
+function goalAtCursor(me: Body): Goal {
+  const b = under(me);
+  if (b && b.mass < me.mass) return { x: b.x, y: b.y, follow: b.id };
+  const [x, y] = toWorld(pointer.x, pointer.y);
+  return { x, y, follow: 0 };
+}
 
 function burnToward(): void {
   const me = human(state);
@@ -209,10 +248,32 @@ function burnToward(): void {
   if (burn(state, me.id, dx, dy, d / BURN_RANGE, cfg, ev)) onEvents(ev);
 }
 
+function tap(): void {
+  const me = human(state);
+  if (!me.alive || state.status !== "playing") return;
+  if (manual.checked) {
+    burnToward();
+    return;
+  }
+  const g = goalAtCursor(me);
+  setGoal(state, me.id, g);
+  const t = g.follow ? state.bodies.find((b) => b.id === g.follow) : null;
+  say(t ? `→ ${t.kind === "light" ? t.name : `${t.mass.toFixed(1)}-lumen orb`}` : "→ point");
+}
+
 canvas.addEventListener("pointermove", (e) => {
   pointer.x = e.clientX;
   pointer.y = e.clientY;
   pointer.inside = true;
+  // Dragging moves a point destination with the cursor.
+  if (pointer.down && !manual.checked) {
+    const me = human(state);
+    if (me.alive && me.goal && !me.goal.follow) {
+      const [x, y] = toWorld(pointer.x, pointer.y);
+      me.goal.x = x;
+      me.goal.y = y;
+    }
+  }
 });
 canvas.addEventListener("pointerleave", () => (pointer.inside = false));
 canvas.addEventListener("pointerdown", (e) => {
@@ -228,10 +289,15 @@ canvas.addEventListener("pointerdown", (e) => {
     reset(seed + 1);
     return;
   }
-  burnToward();
+  tap();
 });
 window.addEventListener("pointerup", () => (pointer.down = false));
 window.addEventListener("keydown", (e) => {
+  if (e.key === " ") {
+    e.preventDefault();
+    setGoal(state, human(state).id, null);
+    say("drift");
+  }
   if (e.key === "r" || e.key === "R") reset(seed + 1);
   if (e.key === "t" || e.key === "T") panel.classList.toggle("hidden");
   if (e.key === "]" && level < LEVELS.length - 1) {
@@ -438,11 +504,60 @@ function draw(dt: number): void {
   // Paths first, under everything.
   if (showAll.checked) for (const l of lights(state)) if (l !== me) drawPath(l, 0.25);
   if (showPath.checked && me.alive) drawPath(me, 0.35);
-  // Where a click would take me: brighter than the drift path, so the choice is visible before it's made.
+  // Where a click would take me. Manual: the burn path. Autopilot: the rehearsed route and its price.
   let ghost: Array<{ x: number; y: number }> | null = null;
+  let route: { plan: Plan; goal: Goal } | null = null;
   if (showPath.checked && me.alive && pointer.inside && state.status === "playing") {
-    ghost = burnPreview(me);
-    if (ghost) drawPoints(me, ghost, `hsla(${identity(me)} / 0.85)`, 1.5, [6, 4]);
+    if (manual.checked) {
+      ghost = burnPreview(me);
+      if (ghost) drawPoints(me, ghost, `hsla(${identity(me)} / 0.85)`, 1.5, [6, 4]);
+    } else {
+      const goal = goalAtCursor(me);
+      const p = plan(state, me, goal, cfg, 8, 0.1);
+      route = { plan: p, goal };
+      ghost = p.path;
+      if (p.blocked) {
+        // Safe part in my colour, the rest in red from the point of impact.
+        const cut = Math.max(0, Math.round(p.blocked.t / 0.1));
+        drawPoints(me, p.path.slice(0, cut), `hsla(${identity(me)} / 0.85)`, 1.5, [6, 4]);
+        const from = p.path[Math.max(0, cut - 1)] ?? me;
+        drawPoints(from, p.path.slice(cut), "hsla(350 90% 65% / 0.8)", 1.5, [2, 4]);
+        const [bx, by] = toScreen(from.x, from.y);
+        ctx.strokeStyle = "hsla(350 90% 65% / 0.9)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(bx - 6, by - 6);
+        ctx.lineTo(bx + 6, by + 6);
+        ctx.moveTo(bx + 6, by - 6);
+        ctx.lineTo(bx - 6, by + 6);
+        ctx.stroke();
+      } else {
+        drawPoints(me, p.path, p.arrives ? `hsla(${identity(me)} / 0.85)` : "hsla(0 0% 100% / 0.3)", 1.5, [6, 4]);
+      }
+    }
+  }
+  // The current destination and the leash to it.
+  if (me.alive && me.goal) {
+    const t = me.goal.follow ? state.bodies.find((b) => b.id === me.goal!.follow) : null;
+    const gx = t ? t.x : me.goal.x;
+    const gy = t ? t.y : me.goal.y;
+    const [sx, sy] = toScreen(gx, gy);
+    ctx.strokeStyle = `hsla(${identity(me)} / 0.7)`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(sx, sy, t ? Math.max(6, radiusOf(t.mass, cfg) * z + 4) : 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sx - 11, sy);
+    ctx.lineTo(sx - 4, sy);
+    ctx.moveTo(sx + 4, sy);
+    ctx.lineTo(sx + 11, sy);
+    ctx.moveTo(sx, sy - 11);
+    ctx.lineTo(sx, sy - 4);
+    ctx.moveTo(sx, sy + 4);
+    ctx.lineTo(sx, sy + 11);
+    ctx.stroke();
   }
 
   // Bodies, big first so lights and orbs sit on top of sun halos.
@@ -527,8 +642,8 @@ function draw(dt: number): void {
     if (hit) {
       const b = hit.b;
       const verdict = b.mass > me.mass ? "absorbs you" : b.mass < me.mass ? "food" : "equal";
-      // Its path, and where my burn path comes closest to it. Green when that's a catch.
-      if (b.kind !== "orb" || !b.anchored) {
+      // Its path, and where my path comes closest to it. Green when that's a catch.
+      if (!b.anchored) {
         const theirs = predict(state, b, cfg, 4, 0.1);
         drawPoints(b, theirs, `hsla(${hueOf(b, me)} / 0.6)`, 1, [2, 4]);
         const mine = ghost ?? predict(state, me, cfg, 4, 0.1);
@@ -567,8 +682,15 @@ function draw(dt: number): void {
       ctx.font = "12px ui-monospace, Menlo, monospace";
       ctx.textAlign = "center";
       ctx.fillStyle = `hsla(${hueOf(b, me)} / 0.95)`;
-      const label = `${b.kind === "light" ? b.name + " · " : ""}${b.mass.toFixed(b.mass < 10 ? 1 : 0)} · ${verdict}`;
-      ctx.fillText(label, hit.sx, hit.sy + hit.r + 16);
+      const price = route && route.goal.follow === b.id
+        ? route.plan.blocked
+          ? " · route hits something heavier"
+          : route.plan.arrives
+            ? ` · ${route.plan.cost.toFixed(1)} to catch in ${route.plan.t.toFixed(0)}s`
+            : " · can't catch"
+        : "";
+      const label = `${b.kind === "light" ? b.name + " · " : ""}${b.mass.toFixed(b.mass < 10 ? 1 : 0)} · ${verdict}${price}`;
+      ctx.fillText(label, hit.sx, hit.sy - hit.r - 12);
       ctx.strokeStyle = `hsla(${hueOf(b, me)} / 0.6)`;
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -577,8 +699,16 @@ function draw(dt: number): void {
     }
   }
 
-  // Aim: a line from me to the cursor with the burn strength as its brightness.
-  if (me.alive && pointer.inside && state.status === "playing") {
+  // Price tag for a point destination.
+  if (route && !route.goal.follow) {
+    ctx.font = "11px ui-monospace, Menlo, monospace";
+    ctx.textAlign = "left";
+    const blocked = route.plan.blocked;
+    ctx.fillStyle = blocked ? "hsla(350 90% 70% / 0.9)" : route.plan.arrives ? "hsla(200 90% 85% / 0.85)" : "hsla(0 0% 100% / 0.45)";
+    ctx.fillText(blocked ? "route hits something heavier" : route.plan.arrives ? `${route.plan.cost.toFixed(1)} · ${route.plan.t.toFixed(0)}s` : "too far", pointer.x + 12, pointer.y - 10);
+  }
+  // Aim: a line from me to the cursor with the burn strength as its brightness (manual only).
+  if (manual.checked && me.alive && pointer.inside && state.status === "playing") {
     const [sx, sy] = toScreen(me.x, me.y);
     const dx = pointer.x - sx;
     const dy = pointer.y - sy;
@@ -622,7 +752,7 @@ function frame(now: number): void {
     if (state.status === "playing") {
       const ev: Ev[] = [];
       for (const it of botTurn(state, cfg, DT, undefined, mem)) burn(state, it.id, it.dx, it.dy, it.strength, cfg, ev);
-      if (pointer.down) burnToward();
+      if (pointer.down && manual.checked) burnToward();
       step(state, cfg, DT, ev);
       onEvents(ev);
     }
@@ -658,6 +788,8 @@ const SLIDERS: SliderDef[] = [
   { key: "radiusScale", min: 2, max: 8, stepSize: 0.25 },
   { key: "radiusFloor", min: 0, max: 8, stepSize: 0.5 },
   { key: "exhaustHalfLife", min: 0.2, max: 6, stepSize: 0.1 },
+  { key: "cruise", min: 40, max: 400, stepSize: 10 },
+  { key: "approach", min: 0.2, max: 3, stepSize: 0.1 },
 ];
 const slidersEl = $("sliders");
 function buildSliders(): void {

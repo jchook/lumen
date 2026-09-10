@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, predict, radiusOf, step, type Config, type State } from "./index";
+import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, plan, predict, radiusOf, setGoal, step, type Config, type State } from "./index";
 import { botTurn, decide } from "./bots";
 
 const cfg: Config = { ...defaultConfig };
 const empty = (seed = 1): State => ({ seed, rng: () => 0.5, time: 0, status: "playing", nextId: 1, bodies: [] });
 const add = (s: State, kind: "orb" | "light", x: number, y: number, mass: number, extra: Partial<State["bodies"][number]> = {}) => {
-  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, ...extra };
+  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, spent: 0, ...extra };
   s.bodies.push(b);
   return b;
 };
@@ -232,18 +232,19 @@ describe("bots", () => {
     expect(it).not.toBeNull();
     expect(it.dx).toBeLessThan(0);
   });
-  test("chase a worthwhile orb", () => {
+  test("chase a worthwhile orb by handing it to the autopilot", () => {
     const s = empty();
     const bot = add(s, "light", 500, 500, 5, { name: "Umbra", ai: true });
-    add(s, "orb", 700, 500, 3);
-    const it = decide(s, bot.id, cfg)!;
-    expect(it.dx).toBeGreaterThan(0);
+    const food = add(s, "orb", 700, 500, 3);
+    expect(decide(s, bot.id, cfg)).toBeNull();
+    expect(bot.goal?.follow).toBe(food.id);
   });
   test("ignore crumbs that cost more than they give", () => {
     const s = empty();
     const bot = add(s, "light", 500, 500, 50, { name: "Umbra", ai: true });
     add(s, "orb", 700, 500, 0.5);
     expect(decide(s, bot.id, cfg)).toBeNull();
+    expect(bot.goal).toBeNull();
   });
   test("botTurn spreads decisions over time", () => {
     const s = newGame(5, cfg);
@@ -266,5 +267,57 @@ describe("predict", () => {
     run(s, 2);
     const end = path[path.length - 1]!;
     expect(dist(end, me, cfg)).toBeLessThan(8);
+  });
+});
+
+describe("autopilot", () => {
+  test("flies to a point and stops steering there", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    setGoal(s, me.id, { x: 900, y: 500, follow: 0 });
+    const ev = run(s, 8);
+    expect(ev.some((e) => e.type === "arrive")).toBe(true);
+    expect(me.goal).toBeNull();
+    expect(dist(me, { x: 900, y: 500 }, cfg)).toBeLessThan(60);
+    expect(me.mass).toBeLessThan(10);
+  });
+  test("follows a drifting orb and eats it", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    const food = add(s, "orb", 800, 600, 2, { vx: 20, vy: -15 });
+    setGoal(s, me.id, { x: 0, y: 0, follow: food.id });
+    run(s, 10);
+    expect(food.alive).toBe(false);
+    expect(me.mass).toBeGreaterThan(10 - me.spent + 1.5);
+  });
+  test("drops a goal that becomes heavier than it", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 5, { name: "You" });
+    const t = add(s, "orb", 900, 500, 4);
+    setGoal(s, me.id, { x: 0, y: 0, follow: t.id });
+    t.mass = 50;
+    run(s, 0.1);
+    expect(me.goal).toBeNull();
+  });
+  test("plan reports a heavier body in the way", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    const wall = add(s, "orb", 700, 500, 20);
+    const clear = plan(s, me, { x: 500, y: 200, follow: 0 }, cfg, 8);
+    const through = plan(s, me, { x: 900, y: 500, follow: 0 }, cfg, 8);
+    expect(clear.blocked).toBeNull();
+    expect(through.blocked?.id).toBe(wall.id);
+  });
+  test("plan predicts the real trip within tolerance", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    add(s, "orb", 1100, 800, 150, { anchored: true });
+    const goal = { x: 800, y: 400, follow: 0 };
+    const p = plan(s, me, goal, cfg, 8);
+    expect(p.arrives).toBe(true);
+    setGoal(s, me.id, goal);
+    run(s, p.t + 0.5);
+    expect(dist(me, goal, cfg)).toBeLessThan(cfg.arrive + 40);
+    expect(Math.abs(10 - me.mass - p.cost)).toBeLessThan(0.15);
   });
 });
