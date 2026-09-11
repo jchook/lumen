@@ -278,8 +278,14 @@ describe("autopilot", () => {
     const ev = run(s, 8);
     expect(ev.some((e) => e.type === "arrive")).toBe(true);
     expect(me.goal).toBeNull();
-    expect(dist(me, { x: 900, y: 500 }, cfg)).toBeLessThan(60);
     expect(me.mass).toBeLessThan(10);
+  });
+  test("never burns to slow down", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You", vx: cfg.cruise * 2 });
+    setGoal(s, me.id, { x: 700, y: 500, follow: 0 });
+    run(s, 0.5);
+    expect(me.mass).toBe(10);
   });
   test("follows a drifting orb and eats it", () => {
     const s = empty();
@@ -316,8 +322,8 @@ describe("autopilot", () => {
     const p = plan(s, me, goal, cfg, 8);
     expect(p.arrives).toBe(true);
     setGoal(s, me.id, goal);
-    run(s, p.t + 0.5);
-    expect(dist(me, goal, cfg)).toBeLessThan(cfg.arrive + 40);
+    const ev = run(s, p.t + 0.3);
+    expect(ev.some((e) => e.type === "arrive")).toBe(true);
     expect(Math.abs(10 - me.mass - p.cost)).toBeLessThan(0.15);
   });
 });

@@ -123,15 +123,15 @@ export const defaultConfig: Config = {
   radiusScale: 4,
   radiusFloor: 3,
   absorbRate: 2.5,
-  burnFraction: 0.045,
-  ejectSpeed: 900,
+  burnFraction: 0.035,
+  ejectSpeed: 1100,
   burnCooldown: 0.2,
   minBurnMass: 0.5,
   dust: 0.05,
   exhaustHalfLife: 1.2,
-  cruise: 150,
-  approach: 0.9,
-  deadband: 6,
+  cruise: 100,
+  approach: 0.5,
+  deadband: 10,
   arrive: 12,
 };
 
@@ -373,11 +373,19 @@ interface Mover {
 export function steer(b: Mover, tx: number, ty: number, tvx: number, tvy: number, cfg: Config): { dx: number; dy: number; strength: number } | null {
   const [dx, dy] = delta(b.x, b.y, tx, ty, cfg);
   const d = Math.hypot(dx, dy);
+  if (d < 1e-6) return null;
+  const ux = dx / d;
+  const uy = dy / d;
   const speed = Math.min(cfg.cruise, cfg.approach * d);
-  const wantX = tvx + (d > 1e-6 ? (dx / d) * speed : 0);
-  const wantY = tvy + (d > 1e-6 ? (dy / d) * speed : 0);
-  const ex = wantX - b.vx;
-  const ey = wantY - b.vy;
+  let ex = tvx + ux * speed - b.vx;
+  let ey = tvy + uy * speed - b.vy;
+  // Never brake: if we're already closing faster than wanted, keep it. Only fix the sideways miss
+  // and add closing speed when short of it. Drift is free; burns aren't.
+  const along = ex * ux + ey * uy;
+  if (along < 0) {
+    ex -= along * ux;
+    ey -= along * uy;
+  }
   const e = Math.hypot(ex, ey);
   if (e < cfg.deadband) return null;
   const full = burnDeltaV(b.mass, 1, cfg);
