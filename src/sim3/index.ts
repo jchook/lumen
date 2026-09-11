@@ -38,14 +38,24 @@ export interface Body {
   goal: Goal | null;
   /** Mass burned on the current goal. */
   spent: number;
+  /** Bot temperament; lights only. */
+  trait: Trait;
+  /** A prize: a heavy orb on a clock, falling toward a giant. */
+  prize: boolean;
 }
 
-/** A destination: a point, or a body to follow (`follow` > 0). */
+/**
+ * A destination: a point, a body to follow (`follow` > 0), or an orbit around a body
+ * (`follow` > 0 and `orbit` = the radius to hold).
+ */
 export interface Goal {
   x: number;
   y: number;
   follow: number;
+  orbit?: number;
 }
+
+export type Trait = "rival" | "hunter" | "grazer" | "coward";
 
 export interface Config {
   width: number;
@@ -104,6 +114,18 @@ export interface Config {
   deadband: number;
   /** Autopilot: a point goal counts as reached inside this many px. */
   arrive: number;
+  /** Autopilot: velocity error tolerated while holding an orbit, px/s. */
+  orbitDeadband: number;
+  /** The bell: seconds per round. 0 = no clock. */
+  roundSeconds: number;
+  /** Prizes: seconds between them (0 = never), and their mass as a share of the biggest light. */
+  prizeEvery: number;
+  prizeShare: number;
+  prizeMin: number;
+  /** Giant flares: seconds between them per giant (0 = never), orbs per flare, mass per orb. */
+  flareEvery: number;
+  flareCount: number;
+  flareMass: number;
 }
 
 export const defaultConfig: Config = {
@@ -139,6 +161,14 @@ export const defaultConfig: Config = {
   approach: 0.5,
   deadband: 10,
   arrive: 12,
+  orbitDeadband: 16,
+  roundSeconds: 180,
+  prizeEvery: 45,
+  prizeShare: 0.7,
+  prizeMin: 6,
+  flareEvery: 40,
+  flareCount: 6,
+  flareMass: 1,
 };
 
 export type Ev =
@@ -146,6 +176,9 @@ export type Ev =
   | { type: "gone"; id: number; kind: Kind; name: string; by: number }
   | { type: "burn"; id: number; x: number; y: number; dx: number; dy: number; mass: number }
   | { type: "arrive"; id: number }
+  | { type: "prize"; id: number; x: number; y: number; mass: number }
+  | { type: "flare"; id: number; x: number; y: number }
+  | { type: "bell"; winner: number }
   | { type: "win"; id: number }
   | { type: "over" };
 
@@ -227,6 +260,8 @@ function makeBody(s: State, kind: Kind, x: number, y: number, mass: number, extr
     cooldown: 0,
     goal: null,
     spent: 0,
+    trait: "rival",
+    prize: false,
     ...extra,
   };
   s.bodies.push(b);
@@ -239,6 +274,7 @@ export function orbitalSpeed(M: number, d: number, cfg: Config): number {
 }
 
 const NAMES = ["Umbra", "Nyx", "Sable", "Vesper", "Morrow", "Ash", "Dusk", "Rune"];
+const TRAITS: Trait[] = ["hunter", "coward", "grazer", "rival"];
 
 // ---------- setup ----------
 
@@ -338,6 +374,7 @@ function generate(seed: number, cfg: Config): State {
     drifting("light", cfg.startMass, wrap(g.x + Math.cos(a) * d, cfg.width), wrap(g.y + Math.sin(a) * d, cfg.height), {
       name: i === 0 ? "You" : NAMES[(i - 1) % NAMES.length]!,
       ai: i !== 0,
+      trait: i === 0 ? "rival" : TRAITS[(i - 1) % TRAITS.length]!,
     });
   }
   // The pantry: every light gets the same orbs at the same distances, co-orbiting with it, so the
@@ -452,6 +489,32 @@ export function steer(b: Mover, tx: number, ty: number, tvx: number, tvy: number
   return { dx: ex, dy: ey, strength: Math.min(1, e / full) };
 }
 
+/**
+ * Hold a circular orbit of radius `r` around a body at (tx, ty) moving at (tvx, tvy): match the
+ * circular speed tangentially, correct the radius gently, keep the current sense of rotation.
+ * Braking is allowed here; circularising needs it.
+ */
+export function steerOrbit(b: Mover, tx: number, ty: number, tvx: number, tvy: number, tmass: number, r: number, cfg: Config): { dx: number; dy: number; strength: number } | null {
+  const [dx, dy] = delta(tx, ty, b.x, b.y, cfg); // from body to me
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-6) return null;
+  const ux = dx / d;
+  const uy = dy / d;
+  const rvx = b.vx - tvx;
+  const rvy = b.vy - tvy;
+  const sense = ux * rvy - uy * rvx >= 0 ? 1 : -1;
+  const v = orbitalSpeed(tmass, r, cfg);
+  const radial = Math.max(-v * 0.6, Math.min(v * 0.6, (r - d) * 0.25));
+  const wantX = tvx + -uy * sense * v + ux * radial;
+  const wantY = tvy + ux * sense * v + uy * radial;
+  const ex = wantX - b.vx;
+  const ey = wantY - b.vy;
+  const e = Math.hypot(ex, ey);
+  if (e < cfg.orbitDeadband) return null;
+  const full = burnDeltaV(b.mass, 1, cfg);
+  return { dx: ex, dy: ey, strength: Math.min(1, e / full) };
+}
+
 /** Point a light somewhere, or at something. Null clears it. */
 export function setGoal(s: State, id: number, goal: Goal | null): void {
   const b = byId(s, id);
@@ -461,12 +524,18 @@ export function setGoal(s: State, id: number, goal: Goal | null): void {
 }
 
 /** What a goal resolves to right now: position and velocity, or null if it's gone or unsafe. */
-function resolveGoal(s: State, b: Body, cfg: Config): { x: number; y: number; vx: number; vy: number; reach: number } | null {
+function resolveGoal(s: State, b: Body, cfg: Config): { x: number; y: number; vx: number; vy: number; reach: number; body: Body | null } | null {
   const g = b.goal!;
-  if (!g.follow) return { x: g.x, y: g.y, vx: 0, vy: 0, reach: cfg.arrive };
+  if (!g.follow) return { x: g.x, y: g.y, vx: 0, vy: 0, reach: cfg.arrive, body: null };
   const t = byId(s, g.follow);
-  if (!t || !t.alive || t.mass >= b.mass) return null;
-  return { x: t.x, y: t.y, vx: t.vx, vy: t.vy, reach: radiusOf(t.mass, cfg) + radiusOf(b.mass, cfg) };
+  if (!t || !t.alive) return null;
+  if (g.orbit) {
+    // Orbiting something I've outgrown: just eat it.
+    if (t.mass < b.mass) b.goal = { x: t.x, y: t.y, follow: t.id };
+    return { x: t.x, y: t.y, vx: t.vx, vy: t.vy, reach: 0, body: t };
+  }
+  if (t.mass >= b.mass) return null;
+  return { x: t.x, y: t.y, vx: t.vx, vy: t.vy, reach: radiusOf(t.mass, cfg) + radiusOf(b.mass, cfg), body: t };
 }
 
 function pilot(s: State, cfg: Config, ev: Ev[]): void {
@@ -484,7 +553,7 @@ function pilot(s: State, cfg: Config, ev: Ev[]): void {
       continue;
     }
     if (b.cooldown > 0) continue;
-    const c = steer(b, t.x, t.y, t.vx, t.vy, cfg);
+    const c = b.goal.orbit && t.body ? steerOrbit(b, t.x, t.y, t.vx, t.vy, t.body.mass, b.goal.orbit, cfg) : steer(b, t.x, t.y, t.vx, t.vy, cfg);
     if (!c) continue;
     const before = b.mass;
     if (burn(s, b.id, c.dx, c.dy, c.strength, cfg, ev)) b.spent += before - b.mass;
@@ -524,8 +593,8 @@ export function plan(s: State, me: Body, goal: Goal, cfg: Config, seconds = 6, d
     const ty = theirs ? theirs[Math.min(i, theirs.length - 1)]!.y : goal.y;
     const tvx = target ? target.vx : 0;
     const tvy = target ? target.vy : 0;
-    const reach = target ? radiusOf(target.mass, cfg) + radiusOf(g.mass, cfg) : cfg.arrive;
-    if (dist(g, { x: tx, y: ty }, cfg) <= reach) return { path, cost, arrives: true, t: i * dt, blocked };
+    const reach = goal.orbit ? 0 : target ? radiusOf(target.mass, cfg) + radiusOf(g.mass, cfg) : cfg.arrive;
+    if (!goal.orbit && dist(g, { x: tx, y: ty }, cfg) <= reach) return { path, cost, arrives: true, t: i * dt, blocked };
     if (!blocked) {
       const gr = radiusOf(g.mass, cfg);
       for (const w of walls) {
@@ -537,7 +606,8 @@ export function plan(s: State, me: Body, goal: Goal, cfg: Config, seconds = 6, d
       }
     }
     if (g.cooldown <= 0) {
-      const c = steer(g, tx, ty, tvx, tvy, cfg);
+      const c = goal.orbit && target ? steerOrbit(g, tx, ty, tvx, tvy, target.mass, goal.orbit, cfg) : steer(g, tx, ty, tvx, tvy, cfg);
+      if (goal.orbit && target && !c && i > 2) return { path, cost, arrives: true, t: i * dt, blocked };
       if (c) {
         const k = Math.min(1, Math.max(0.15, c.strength));
         const f = cfg.burnFraction * k * agility(g.mass, cfg);
@@ -662,9 +732,78 @@ function absorb(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   }
 }
 
-function finish(s: State, ev: Ev[]): void {
+/** Every so often a heavy orb appears and falls toward the nearest giant. Race for it. */
+function prizes(s: State, cfg: Config, dt: number, ev: Ev[]): void {
+  if (!cfg.prizeEvery) return;
+  const slot = Math.floor(s.time / cfg.prizeEvery);
+  if (slot === 0 || slot === Math.floor((s.time - dt) / cfg.prizeEvery)) return;
+  const giants = s.bodies.filter((b) => b.kind === "orb" && attracts(b, cfg));
+  if (!giants.length) return;
+  const biggest = Math.max(...lights(s).map((l) => l.mass));
+  const mass = Math.max(cfg.prizeMin, biggest * cfg.prizeShare);
+  // A spot well clear of everything heavy, found from a hash of the slot so it's deterministic.
+  let bx = 0;
+  let by = 0;
+  let best = -Infinity;
+  for (let k = 0; k < 24; k++) {
+    const h = mulberry32((s.seed ^ (slot * 7919) ^ (k * 104729)) >>> 0);
+    const px = h() * cfg.width;
+    const py = h() * cfg.height;
+    let g = Infinity;
+    for (const b of s.bodies) if (b.alive && (b.kind === "light" || attracts(b, cfg))) g = Math.min(g, dist({ x: px, y: py }, b, cfg) - radiusOf(b.mass, cfg));
+    if (g > best) {
+      best = g;
+      bx = px;
+      by = py;
+    }
+    if (g > 320) break;
+  }
+  let near = giants[0]!;
+  for (const g of giants) if (dist({ x: bx, y: by }, g, cfg) < dist({ x: bx, y: by }, near, cfg)) near = g;
+  const [dx, dy] = delta(near.x, near.y, bx, by, cfg);
+  const d = Math.hypot(dx, dy) || 1;
+  // Sub-orbital: it spirals in and is gone in a while.
+  const v = orbitalSpeed(near.mass, d, cfg) * 0.5;
+  const p = makeBody(s, "orb", bx, by, mass, { vx: (-dy / d) * v + near.vx, vy: (dx / d) * v + near.vy, prize: true });
+  ev.push({ type: "prize", id: p.id, x: p.x, y: p.y, mass });
+}
+
+/** Giants shed a ring of food outward now and then, staggered so they don't all fire at once. */
+function flares(s: State, cfg: Config, dt: number, ev: Ev[]): void {
+  if (!cfg.flareEvery) return;
+  const giants = s.bodies.filter((b) => b.kind === "orb" && attracts(b, cfg) && !b.prize);
+  giants.forEach((g, i) => {
+    const phase = (i / Math.max(1, giants.length)) * cfg.flareEvery;
+    const slot = Math.floor((s.time - phase) / cfg.flareEvery);
+    if (slot <= 0 || slot === Math.floor((s.time - dt - phase) / cfg.flareEvery)) return;
+    const total = cfg.flareCount * cfg.flareMass;
+    if (g.mass - total < cfg.gravityMass) return;
+    g.mass -= total;
+    const R = radiusOf(g.mass, cfg);
+    for (let k = 0; k < cfg.flareCount; k++) {
+      const a = (k / cfg.flareCount) * Math.PI * 2 + slot * 0.7;
+      const d = R + 30;
+      const v = orbitalSpeed(g.mass, d, cfg);
+      makeBody(s, "orb", wrap(g.x + Math.cos(a) * d, cfg.width), wrap(g.y + Math.sin(a) * d, cfg.height), cfg.flareMass, {
+        vx: g.vx + -Math.sin(a) * v * 1.2 + Math.cos(a) * v * 0.35,
+        vy: g.vy + Math.cos(a) * v * 1.2 + Math.sin(a) * v * 0.35,
+      });
+    }
+    ev.push({ type: "flare", id: g.id, x: g.x, y: g.y });
+  });
+}
+
+function finish(s: State, cfg: Config, ev: Ev[]): void {
   const me = s.bodies.find((b) => b.kind === "light" && !b.ai);
   const rivals = s.bodies.filter((b) => b.kind === "light" && b.ai);
+  if (cfg.roundSeconds && s.time >= cfg.roundSeconds && (me ? me.alive : true)) {
+    // The bell: brightest light standing takes the round.
+    const alive = lights(s).sort((a, b) => b.mass - a.mass);
+    const winner = alive[0];
+    s.status = me && winner === me ? "won" : "over";
+    ev.push({ type: "bell", winner: winner ? winner.id : 0 });
+    return;
+  }
   if (me && !me.alive) {
     s.status = "over";
     ev.push({ type: "over" });
@@ -684,7 +823,9 @@ export function step(s: State, cfg: Config, dt: number, ev: Ev[] = []): Ev[] {
   // Sweep the dead so the pair loop stays cheap.
   s.bodies = s.bodies.filter((b) => b.alive || b.kind === "light");
   s.time += dt;
-  finish(s, ev);
+  prizes(s, cfg, dt, ev);
+  flares(s, cfg, dt, ev);
+  finish(s, cfg, ev);
   return ev;
 }
 

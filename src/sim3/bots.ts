@@ -3,7 +3,7 @@
  * in, chase a lighter body when its mass beats the burns it will take to reach it, otherwise coast
  * and let gravity do the work. Every burn is paid in mass, so the price is always computed first.
  */
-import { byId, delta, plan, predict, radiusOf, setGoal, type Body, type Config, type State } from "./index";
+import { byId, delta, plan, predict, radiusOf, setGoal, type Body, type Config, type State, type Trait } from "./index";
 
 export interface Intent {
   dx: number;
@@ -24,9 +24,20 @@ export interface BotStyle {
   horizon: number;
   /** Only hunt a rival lighter than mass ÷ margin. */
   margin: number;
+  /** Whether it hunts lights at all. */
+  huntsLights: boolean;
 }
 
-export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 5, margin: 1.4 };
+export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 5, margin: 1.4, huntsLights: true };
+
+/** Temperaments. A hunter takes close fights; a grazer never hunts lights; a coward keeps its distance. */
+export const STYLES: Record<Trait, BotStyle> = {
+  rival: defaultStyle,
+  hunter: { ...defaultStyle, sense: 640, fear: 110, greed: 1.4, margin: 1.15 },
+  grazer: { ...defaultStyle, greed: 1.6, fear: 170, huntsLights: false },
+  coward: { ...defaultStyle, fear: 260, greed: 2.0, margin: 2.5 },
+};
+export const styleOf = (b: Body): BotStyle => STYLES[b.trait] ?? defaultStyle;
 
 /** What a bot remembers between decisions: the body it's committed to and what it has paid so far. */
 export interface Memory {
@@ -109,7 +120,7 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
   for (const o of s.bodies) {
     if (o === b || !o.alive || o.mass >= b.mass || o.anchored || o.from) continue;
     // Hunting a rival is only worth it with a clear margin: a close race is lost on burn cost.
-    if (o.kind === "light" && o.mass > b.mass / style.margin) continue;
+    if (o.kind === "light" && (!style.huntsLights || o.mass > b.mass / style.margin)) continue;
     const [dx0, dy0] = delta(b.x, b.y, o.x, o.y, cfg);
     if (Math.hypot(dx0, dy0) > style.sense) continue;
     const p = plan(s, b, { x: o.x, y: o.y, follow: o.id }, cfg, style.horizon, 0.2);
@@ -132,11 +143,12 @@ export function botTurn(s: State, cfg: Config, dt: number, style: BotStyle = def
   const out: Array<{ id: number } & Intent> = [];
   for (const b of s.bodies) {
     if (b.kind !== "light" || !b.ai || !b.alive) continue;
-    const phase = (b.id * 0.137) % style.think;
-    const before = Math.floor((s.time - dt - phase) / style.think);
-    const after = Math.floor((s.time - phase) / style.think);
+    const mine = style === defaultStyle ? styleOf(b) : style;
+    const phase = (b.id * 0.137) % mine.think;
+    const before = Math.floor((s.time - dt - phase) / mine.think);
+    const after = Math.floor((s.time - phase) / mine.think);
     if (after === before) continue;
-    const it = decide(s, b.id, cfg, style, mem);
+    const it = decide(s, b.id, cfg, mine, mem);
     if (it) out.push({ id: b.id, ...it });
   }
   return out;

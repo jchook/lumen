@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, pantryScore, plan, predict, radiusOf, setGoal, step, type Config, type State } from "./index";
-import { botTurn, decide } from "./bots";
+import { STYLES, botTurn, decide } from "./bots";
 
-const cfg: Config = { ...defaultConfig };
+const cfg: Config = { ...defaultConfig, roundSeconds: 0, prizeEvery: 0, flareEvery: 0 };
 const empty = (seed = 1): State => ({ seed, rng: () => 0.5, time: 0, status: "playing", nextId: 1, bodies: [] });
 const add = (s: State, kind: "orb" | "light", x: number, y: number, mass: number, extra: Partial<State["bodies"][number]> = {}) => {
-  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, spent: 0, ...extra };
+  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, spent: 0, trait: "rival" as const, prize: false, ...extra };
   s.bodies.push(b);
   return b;
 };
@@ -338,5 +338,81 @@ describe("autopilot", () => {
     const ev = run(s, p.t + 0.3);
     expect(ev.some((e) => e.type === "arrive")).toBe(true);
     expect(Math.abs(10 - me.mass - p.cost)).toBeLessThan(0.15);
+  });
+});
+
+describe("orbit goal", () => {
+  test("circularises around a giant and holds the radius", () => {
+    const s = empty();
+    const g = add(s, "orb", 1200, 1200, 150, { anchored: true });
+    const me = add(s, "light", 1200 + 300, 1200, 10, { name: "You", vy: 20 });
+    setGoal(s, me.id, { x: 0, y: 0, follow: g.id, orbit: 300 });
+    run(s, 25);
+    expect(me.alive).toBe(true);
+    expect(Math.abs(dist(me, g, cfg) - 300)).toBeLessThan(45);
+    const v = Math.hypot(me.vx, me.vy);
+    expect(Math.abs(v - orbitalSpeed(150, 300, cfg))).toBeLessThan(12);
+  });
+  test("an orbit goal on something lighter becomes a chase", () => {
+    const s = empty();
+    const t = add(s, "orb", 800, 500, 4);
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    setGoal(s, me.id, { x: 0, y: 0, follow: t.id, orbit: 200 });
+    run(s, 0.1);
+    expect(me.goal?.orbit).toBeUndefined();
+    expect(me.goal?.follow).toBe(t.id);
+  });
+});
+
+describe("rounds, prizes, flares", () => {
+  test("the bell ends the round for the brightest light", () => {
+    const c = { ...cfg, roundSeconds: 5 };
+    const s = empty();
+    add(s, "light", 500, 500, 12, { name: "You" });
+    add(s, "light", 900, 900, 8, { name: "Umbra", ai: true });
+    const ev = run(s, 5.1, c);
+    expect(s.status).toBe("won");
+    expect(ev.some((e) => e.type === "bell")).toBe(true);
+  });
+  test("a prize appears on schedule, heavy and falling toward a giant", () => {
+    const c = { ...cfg, prizeEvery: 3 };
+    const s = empty();
+    add(s, "orb", 1200, 1200, 150);
+    add(s, "light", 400, 400, 10, { name: "You" });
+    const ev = run(s, 3.1, c);
+    const p = ev.find((e) => e.type === "prize");
+    expect(p).toBeDefined();
+    const prize = s.bodies.find((b) => b.prize)!;
+    expect(prize.mass).toBeGreaterThanOrEqual(c.prizeMin);
+    const before = dist(prize, s.bodies[0]!, c);
+    run(s, 8, c);
+    expect(dist(prize, s.bodies[0]!, c)).toBeLessThan(before);
+  });
+  test("a giant flares a ring of food and loses that mass", () => {
+    const c = { ...cfg, flareEvery: 4 };
+    const s = empty();
+    const g = add(s, "orb", 1200, 1200, 150);
+    const ev = run(s, 4.2, c);
+    expect(ev.some((e) => e.type === "flare")).toBe(true);
+    expect(g.mass).toBeCloseTo(150 - c.flareCount * c.flareMass, 6);
+    expect(s.bodies.filter((b) => b.kind === "orb" && b.mass === c.flareMass).length).toBe(c.flareCount);
+  });
+});
+
+describe("traits", () => {
+  test("rivals get different temperaments and a grazer never hunts lights", () => {
+    const s = newGame(9, cfg);
+    const traits = new Set(lights(s).filter((l) => l.ai).map((l) => l.trait));
+    expect(traits.size).toBeGreaterThan(1);
+    const g = empty();
+    const grazer = add(g, "light", 500, 500, 10, { name: "Sable", ai: true, trait: "grazer" });
+    add(g, "light", 650, 500, 3, { name: "You" });
+    decide(g, grazer.id, cfg, STYLES.grazer);
+    expect(grazer.goal).toBeNull();
+    const h = empty();
+    const hunter = add(h, "light", 500, 500, 10, { name: "Umbra", ai: true, trait: "hunter" });
+    const prey = add(h, "light", 650, 500, 3, { name: "You" });
+    decide(h, hunter.id, cfg, STYLES.hunter);
+    expect(hunter.goal?.follow).toBe(prey.id);
   });
 });
