@@ -172,9 +172,9 @@ function reset(newSeed: number): void {
   cam.y = human(state).y;
   endEl.classList.remove("on");
   eaten.clear();
-  soundReset();
+  const key = soundReset(seed);
   writeUrl();
-  say(`seed ${seed} · ${cfg.players - 1} rivals`);
+  say(`seed ${seed} · ${cfg.players - 1} rivals · in ${key}`);
 }
 
 // ---------- camera ----------
@@ -1078,7 +1078,7 @@ $("reset").addEventListener("click", () => {
   reset(seed);
 });
 writeUrl();
-say(`seed ${seed} · ${cfg.players - 1} rivals`);
+say(`seed ${seed} · ${cfg.players - 1} rivals · in ${soundReset(seed)}`);
 
 // Debug hook for headless checks.
 (window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg };
