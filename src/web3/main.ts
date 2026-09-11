@@ -24,7 +24,7 @@ import {
 } from "../sim3";
 import { botTurn, type Memories } from "../sim3/bots";
 import { createBloom } from "./bloom";
-import { soundAbsorb, soundBell, soundBurn, soundInit, soundLost, soundMute, soundMuted, soundPrize, soundThreat } from "./sound";
+import { soundAbsorb, soundBell, soundBurn, soundFlare, soundInit, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundThreat } from "./sound";
 
 // ---------- config + persistence ----------
 
@@ -171,6 +171,8 @@ function reset(newSeed: number): void {
   cam.x = human(state).x;
   cam.y = human(state).y;
   endEl.classList.remove("on");
+  eaten.clear();
+  soundReset();
   writeUrl();
   say(`seed ${seed} · ${cfg.players - 1} rivals`);
 }
@@ -403,16 +405,30 @@ function hueOf(b: Body, me: Body): string {
   return "220 10% 70%";
 }
 
+/** Mass I've taken from each body so far, so a meal sounds once, when it's finished. */
+const eaten = new Map<number, number>();
+
 function onEvents(ev: Ev[]): void {
   const me = human(state);
   for (const e of ev) {
     if (e.type === "absorb") {
-      if (e.eater === me.id && e.amount > 0.02) soundAbsorb(e.amount);
+      if (e.eater === me.id) eaten.set(e.food, (eaten.get(e.food) ?? 0) + e.amount);
+    } else if (e.type === "gone") {
+      if (e.by === me.id) {
+        soundAbsorb(eaten.get(e.id) ?? 0.2);
+        eaten.delete(e.id);
+      }
+      if (e.kind === "light") {
+        const by = state.bodies.find((x) => x.id === e.by);
+        const who = by?.name || `a ${by?.mass.toFixed(0)}-lumen body`;
+        say(`${e.name} absorbed by ${who}`);
+      }
     } else if (e.type === "prize") {
       say(`a ${e.mass.toFixed(0)}-lumen prize is falling`);
       soundPrize();
     } else if (e.type === "flare") {
       const g = state.bodies.find((x) => x.id === e.id);
+      soundFlare();
       if (g) {
         for (let i = 0; i < 14; i++) {
           const a = (i / 14) * Math.PI * 2;
@@ -439,10 +455,6 @@ function onEvents(ev: Ev[]): void {
           puffs.push({ x: e.x, y: e.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, hue: identity(b) });
         }
       }
-    } else if (e.type === "gone" && e.kind === "light") {
-      const by = state.bodies.find((x) => x.id === e.by);
-      const who = by?.name || `a ${by?.mass.toFixed(0)}-lumen body`;
-      say(`${e.name} absorbed by ${who}`);
     } else if (e.type === "over") {
       if (state.time < cfg.roundSeconds || !cfg.roundSeconds) soundLost();
       if (me.alive) continue; // the bell already spoke
