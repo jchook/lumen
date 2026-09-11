@@ -380,7 +380,19 @@ const saveLevel = () => {
 // ---------- events ----------
 
 const COLORS: Record<number, string> = {};
-const PALETTE = ["200 90% 78%", "330 90% 70%", "40 95% 65%", "140 70% 60%", "270 80% 72%", "15 90% 65%", "180 70% 60%", "60 80% 65%"];
+/** Gruvbox, as "H S% L%" for hsla(): aqua, purple, yellow, green, blue, orange, red, cream. */
+const GB = {
+  aqua: "109 35% 62%",
+  purple: "344 47% 68%",
+  yellow: "42 95% 58%",
+  green: "61 66% 44%",
+  blue: "157 16% 58%",
+  orange: "27 99% 55%",
+  red: "6 96% 59%",
+  cream: "43 59% 81%",
+  gray: "30 12% 51%",
+};
+const PALETTE = [GB.aqua, GB.purple, GB.yellow, GB.green, GB.blue, GB.orange, GB.red, GB.cream];
 /** A light's identity colour. */
 function identity(b: Body): string {
   if (!b.ai) return PALETTE[0]!;
@@ -400,10 +412,10 @@ function hueOf(b: Body, me: Body): string {
     const owner = state.bodies.find((x) => x.id === b.from);
     if (owner) return identity(owner);
   }
-  if (b.prize && b.mass < me.mass) return "48 100% 65%";
-  if (b.mass > me.mass) return b.mass > me.mass * 3 ? "18 100% 62%" : "348 90% 66%";
-  if (b.mass < me.mass) return b.mass < me.mass * 0.2 ? "215 50% 88%" : "200 85% 78%";
-  return "220 10% 70%";
+  if (b.prize && b.mass < me.mass) return GB.yellow;
+  if (b.mass > me.mass) return b.mass > me.mass * 3 ? GB.orange : GB.red;
+  if (b.mass < me.mass) return b.mass < me.mass * 0.2 ? GB.cream : GB.blue;
+  return GB.gray;
 }
 
 /** Mass I've taken from each body so far, so a meal sounds once, when it's finished. */
@@ -433,7 +445,7 @@ function onEvents(ev: Ev[]): void {
       if (g) {
         for (let i = 0; i < 14; i++) {
           const a = (i / 14) * Math.PI * 2;
-          puffs.push({ x: g.x, y: g.y, vx: Math.cos(a) * 160, vy: Math.sin(a) * 160, age: 0, hue: "35 100% 75%" });
+          puffs.push({ x: g.x, y: g.y, vx: Math.cos(a) * 160, vy: Math.sin(a) * 160, age: 0, hue: GB.yellow });
         }
       }
     } else if (e.type === "bell") {
@@ -477,14 +489,14 @@ function onEvents(ev: Ev[]): void {
 const STARS = Array.from({ length: 260 }, (_, i) => ({ x: ((i * 7919) % 2400) / 2400, y: ((i * 104729) % 2400) / 2400, s: 0.4 + ((i * 31) % 10) / 12 }));
 
 function drawBackground(): void {
-  ctx.fillStyle = "#05060c";
+  ctx.fillStyle = "#1d2021";
   ctx.fillRect(-2, -2, W + 4, H + 4);
   // Parallax starfield tiled on the torus at half the camera motion.
   const z = zoom();
   const tile = Math.min(cfg.width, cfg.height) * z;
   const ox = ((-cam.x * 0.5 * z) % tile + tile) % tile;
   const oy = ((-cam.y * 0.5 * z) % tile + tile) % tile;
-  ctx.fillStyle = "rgba(200, 215, 255, 0.55)";
+  ctx.fillStyle = "rgba(235, 219, 178, 0.55)";
   for (let ty = -1; ty <= Math.ceil(H / tile); ty++) {
     for (let tx = -1; tx <= Math.ceil(W / tile); tx++) {
       for (const st of STARS) {
@@ -620,9 +632,9 @@ function drawWorld(dt: number): void {
         const cut = Math.max(0, Math.round(p.blocked.t / 0.1));
         drawPoints(me, p.path.slice(0, cut), `hsla(${identity(me)} / 0.85)`, 1.5, [6, 4]);
         const from = p.path[Math.max(0, cut - 1)] ?? me;
-        drawPoints(from, p.path.slice(cut), "hsla(350 90% 65% / 0.8)", 1.5, [2, 4]);
+        drawPoints(from, p.path.slice(cut), `hsla(${GB.red} / 0.8)`, 1.5, [2, 4]);
         const [bx, by] = toScreen(from.x, from.y);
-        ctx.strokeStyle = "hsla(350 90% 65% / 0.9)";
+        ctx.strokeStyle = `hsla(${GB.red} / 0.9)`;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(bx - 6, by - 6);
@@ -699,7 +711,7 @@ function drawWorld(dt: number): void {
     for (const extra of [110, 220]) {
       const r = (R + extra) * z;
       if (r > Math.max(W, H)) continue;
-      ctx.strokeStyle = "hsla(30 80% 80% / 0.07)";
+      ctx.strokeStyle = `hsla(${GB.cream} / 0.07)`;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
@@ -745,12 +757,12 @@ function drawWorld(dt: number): void {
       ctx.beginPath();
       ctx.arc(sx, sy, Math.max(1, r * 0.62), 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = "hsla(0 0% 100% / 0.95)";
+      ctx.fillStyle = "hsla(43 59% 92% / 0.95)";
       ctx.beginPath();
       ctx.arc(sx, sy, Math.max(0.8, r * 0.36), 0, Math.PI * 2);
       ctx.fill();
     } else {
-      ctx.fillStyle = b.mass >= cfg.gravityMass ? "hsla(30 80% 92% / 0.9)" : `hsla(${hue} / 0.9)`;
+      ctx.fillStyle = b.mass >= cfg.gravityMass ? "hsla(43 59% 88% / 0.92)" : `hsla(${hue} / 0.9)`;
       ctx.beginPath();
       ctx.arc(sx, sy, Math.max(0.8, r * (b.mass >= cfg.gravityMass ? 0.82 : 0.5)), 0, Math.PI * 2);
       ctx.fill();
@@ -758,14 +770,14 @@ function drawWorld(dt: number): void {
     if (b.prize) {
       // A prize pulses so it reads as an event, not scenery.
       const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 180);
-      ctx.strokeStyle = `hsla(48 100% 70% / ${0.35 + 0.5 * pulse})`;
+      ctx.strokeStyle = `hsla(${GB.yellow} / ${0.35 + 0.5 * pulse})`;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(sx, sy, r + 6 + pulse * 4, 0, Math.PI * 2);
       ctx.stroke();
     }
     if (heavier && isLight) {
-      ctx.strokeStyle = "hsla(350 90% 65% / 0.8)";
+      ctx.strokeStyle = `hsla(${GB.red} / 0.8)`;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(sx, sy, r + 5, 0, Math.PI * 2);
@@ -844,7 +856,7 @@ function drawUi(): void {
           const caught = best <= 0;
           const [mx, my] = toScreen(mine[at]!.x, mine[at]!.y);
           const [tx, ty] = toScreen(theirs[at]!.x, theirs[at]!.y);
-          ctx.strokeStyle = caught ? "hsla(140 80% 60% / 0.9)" : "hsla(0 0% 100% / 0.35)";
+          ctx.strokeStyle = caught ? `hsla(${GB.green} / 0.95)` : `hsla(${GB.cream} / 0.35)`;
           ctx.lineWidth = 1;
           ctx.setLineDash([]);
           ctx.beginPath();
@@ -855,7 +867,7 @@ function drawUi(): void {
           ctx.arc(tx, ty, Math.max(3, radiusOf(b.mass, cfg) * z), 0, Math.PI * 2);
           ctx.stroke();
           if (caught) {
-            ctx.fillStyle = "hsla(140 80% 60% / 0.9)";
+            ctx.fillStyle = `hsla(${GB.green} / 0.95)`;
             ctx.font = "11px ui-monospace, Menlo, monospace";
             ctx.fillText(`${((at + 1) * 0.1).toFixed(1)}s`, tx, ty - Math.max(3, radiusOf(b.mass, cfg) * z) - 6);
           }
@@ -890,7 +902,7 @@ function drawUi(): void {
     ctx.font = "11px ui-monospace, Menlo, monospace";
     ctx.textAlign = "left";
     const blocked = route.plan.blocked;
-    ctx.fillStyle = blocked ? "hsla(350 90% 70% / 0.9)" : route.plan.arrives ? "hsla(200 90% 85% / 0.85)" : "hsla(0 0% 100% / 0.45)";
+    ctx.fillStyle = blocked ? `hsla(${GB.red} / 0.9)` : route.plan.arrives ? `hsla(${GB.cream} / 0.85)` : `hsla(${GB.cream} / 0.45)`;
     ctx.fillText(blocked ? "route hits something heavier" : route.plan.arrives ? `${route.plan.cost.toFixed(1)} · ${route.plan.t.toFixed(0)}s` : "too far", pointer.x + 12, pointer.y - 10);
   }
   // Aim: a line from me to the cursor with the burn strength as its brightness (manual only).
@@ -900,13 +912,13 @@ function drawUi(): void {
     const dy = pointer.y - sy;
     const d = Math.hypot(dx, dy);
     const k = Math.min(1, d / BURN_RANGE);
-    ctx.strokeStyle = `hsla(200 90% 80% / ${0.15 + 0.45 * k})`;
+    ctx.strokeStyle = `hsla(${GB.aqua} / ${0.15 + 0.45 * k})`;
     ctx.lineWidth = 1 + 2 * k;
     ctx.beginPath();
     ctx.moveTo(sx, sy);
     ctx.lineTo(sx + (dx / (d || 1)) * Math.min(d, BURN_RANGE), sy + (dy / (d || 1)) * Math.min(d, BURN_RANGE));
     ctx.stroke();
-    ctx.strokeStyle = "hsla(200 90% 85% / 0.7)";
+    ctx.strokeStyle = `hsla(${GB.aqua} / 0.7)`;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(pointer.x, pointer.y, 5 + 5 * k, 0, Math.PI * 2);
@@ -921,9 +933,9 @@ function drawMinimap(me: Body): void {
   const x0 = W - size - pad;
   const y0 = H - size - pad;
   const k = size / cfg.width;
-  ctx.fillStyle = "rgba(5, 6, 12, 0.7)";
+  ctx.fillStyle = "rgba(29, 32, 33, 0.75)";
   ctx.fillRect(x0, y0, size, size);
-  ctx.strokeStyle = "rgba(120, 140, 200, 0.25)";
+  ctx.strokeStyle = "rgba(146, 131, 116, 0.35)";
   ctx.lineWidth = 1;
   ctx.strokeRect(x0 + 0.5, y0 + 0.5, size - 1, size - 1);
   // Centre the map on me so the view never straddles the seam.
@@ -942,15 +954,15 @@ function drawMinimap(me: Body): void {
       ctx.arc(px, py, b === me ? 3 : 2.5, 0, Math.PI * 2);
       ctx.fill();
     } else if (attracts(b, cfg)) {
-      ctx.fillStyle = "hsla(30 90% 70% / 0.8)";
+      ctx.fillStyle = `hsla(${GB.orange} / 0.85)`;
       ctx.beginPath();
       ctx.arc(px, py, Math.max(2, radiusOf(b.mass, cfg) * k), 0, Math.PI * 2);
       ctx.fill();
     } else if (b.prize) {
-      ctx.fillStyle = "hsl(48 100% 65%)";
+      ctx.fillStyle = `hsl(${GB.yellow})`;
       ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
     } else {
-      ctx.fillStyle = b.mass < me.mass ? "hsla(210 60% 85% / 0.55)" : "hsla(350 80% 65% / 0.55)";
+      ctx.fillStyle = b.mass < me.mass ? `hsla(${GB.cream} / 0.5)` : `hsla(${GB.red} / 0.55)`;
       ctx.fillRect(px - 0.5, py - 0.5, 1.2, 1.2);
     }
   }
@@ -958,7 +970,7 @@ function drawMinimap(me: Body): void {
   const vw = (W / zoom()) * k;
   const vh = (H / zoom()) * k;
   const [vx, vy] = at(cam);
-  ctx.strokeStyle = "rgba(220, 230, 255, 0.35)";
+  ctx.strokeStyle = "rgba(235, 219, 178, 0.4)";
   ctx.strokeRect(vx - vw / 2, vy - vh / 2, vw, vh);
 }
 

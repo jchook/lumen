@@ -1,7 +1,8 @@
 /**
  * Bloom as a post-process over the 2D canvas. The scene is downsampled to a quarter, the bright
  * parts are blurred twice (horizontal, vertical) in WebGL, and the result is layered over the game
- * with screen blending. Everything stays drawn by the Canvas2D renderer; this only adds glow.
+ * with screen blending. The final pass splits red and green a little, growing toward the edges,
+ * the way a worn tape or a cheap lens does. Everything stays drawn by the Canvas2D renderer.
  */
 export interface Bloom {
   render(): void;
@@ -16,17 +17,26 @@ void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }`;
 const FS = `#version 300 es
 precision mediump float;
 in vec2 uv; out vec4 o;
-uniform sampler2D tex; uniform vec2 dir; uniform float threshold; uniform float gain;
+uniform sampler2D tex; uniform vec2 dir; uniform float threshold; uniform float gain; uniform float split;
 const float w[5] = float[](0.227, 0.194, 0.121, 0.054, 0.016);
 vec3 bright(vec2 q){ vec3 c = texture(tex, q).rgb; float l = dot(c, vec3(0.3, 0.59, 0.11)); return c * smoothstep(threshold, threshold + 0.25, l); }
-void main(){
-  vec3 s = (threshold > 0.0 ? bright(uv) : texture(tex, uv).rgb) * w[0];
+vec3 blur(vec2 q){
+  vec3 s = (threshold > 0.0 ? bright(q) : texture(tex, q).rgb) * w[0];
   for (int i = 1; i < 5; i++) {
     vec2 d = dir * float(i);
-    s += (threshold > 0.0 ? bright(uv + d) : texture(tex, uv + d).rgb) * w[i];
-    s += (threshold > 0.0 ? bright(uv - d) : texture(tex, uv - d).rgb) * w[i];
+    s += (threshold > 0.0 ? bright(q + d) : texture(tex, q + d).rgb) * w[i];
+    s += (threshold > 0.0 ? bright(q - d) : texture(tex, q - d).rgb) * w[i];
   }
-  o = vec4(s * gain, 1.0);
+  return s;
+}
+void main(){
+  if (split <= 0.0) { o = vec4(blur(uv) * gain, 1.0); return; }
+  // Chromatic split: red pulled outward, green pulled inward, blue in place.
+  vec2 off = (uv - 0.5) * split;
+  float r = blur(uv + off).r;
+  float g = blur(uv - off).g;
+  float b = blur(uv).b;
+  o = vec4(vec3(r, g, b) * gain, 1.0);
 }`;
 
 export function createBloom(source: HTMLCanvasElement, target: HTMLCanvasElement, scale = 0.25): Bloom {
@@ -62,6 +72,7 @@ export function createBloom(source: HTMLCanvasElement, target: HTMLCanvasElement
   const uDir = gl.getUniformLocation(prog, "dir");
   const uThr = gl.getUniformLocation(prog, "threshold");
   const uGain = gl.getUniformLocation(prog, "gain");
+  const uSplit = gl.getUniformLocation(prog, "split");
   const makeTex = (): WebGLTexture => {
     const t = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, t);
@@ -99,13 +110,15 @@ export function createBloom(source: HTMLCanvasElement, target: HTMLCanvasElement
     gl.uniform2f(uDir, 1.6 / w, 0);
     gl.uniform1f(uThr, 0.5);
     gl.uniform1f(uGain, 1.0);
+    gl.uniform1f(uSplit, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     // Pass 2: vertical blur, to the screen.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindTexture(gl.TEXTURE_2D, ping);
     gl.uniform2f(uDir, 0, 1.6 / h);
     gl.uniform1f(uThr, 0);
-    gl.uniform1f(uGain, 1.1);
+    gl.uniform1f(uGain, 1.15);
+    gl.uniform1f(uSplit, 0.012);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   };
   return { render, resize, ok: true };
