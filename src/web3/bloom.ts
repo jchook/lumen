@@ -118,7 +118,7 @@ export function createBloom(source: HTMLCanvasElement, target: HTMLCanvasElement
     gl.uniform2f(uDir, 0, 1.6 / h);
     gl.uniform1f(uThr, 0);
     gl.uniform1f(uGain, 1.15);
-    gl.uniform1f(uSplit, 0.012);
+    gl.uniform1f(uSplit, 0.0035);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   };
   return { render, resize, ok: true };
