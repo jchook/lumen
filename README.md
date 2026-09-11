@@ -154,6 +154,26 @@ off screen, larger when closer. The camera zooms out as you grow and whenever yo
 something that can pull or chase you. Manual burns (click toward a direction, farther is harder)
 are behind a toggle in the tuning panel.
 
+**Rounds.** Three minutes on the clock. At the bell the brightest light standing takes the round;
+being the last light ends it early. The sky is in the URL (`#s=<seed>&r=<rivals>`), so a link is a
+challenge: same board, same rivals, beat the score.
+
+**Orbits.** Tap anything that pulls and could eat you and your light enters orbit at its current
+distance, then holds it. Faint lanes ring every attractor. Orbits are the safe harbours and the
+highways; getting into one is a maneuver you plan and pay for.
+
+**Events.** Every 45 s a prize appears: a heavy gold orb worth most of the biggest light, falling
+toward the nearest giant on a sub-orbital path, gone in a while. Every 40 s each giant flares a ring
+of six small orbs outward and loses that mass, so giants slowly shrink over a round.
+
+**Rivals.** Each has a temperament, shown beside its name: a hunter takes close fights, a grazer
+never hunts lights, a coward keeps its distance. Nobody hunts lights in the first 25 s.
+
+**Sound and glow.** Web Audio, no assets: a tone on absorb that drops with the mass, a thump on
+burn, a hum that swells near anything that can eat you, a chime for a prize, a bell for the round.
+M mutes. Bloom is a WebGL post-process over the Canvas2D scene (`src/web3/bloom.ts`), toggled in the
+tuning panel.
+
 **Fair starts.** Every light begins with the same pantry: five orbs of fixed masses in close
 co-orbit, so the opening is the same race for everyone. The board is then scored by how much cheap
 food each light can reach, and rerolled (deterministically from the seed) while the richest start

@@ -97,7 +97,7 @@ export function createBloom(source: HTMLCanvasElement, target: HTMLCanvasElement
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ping, 0);
     gl.uniform2f(uDir, 1.6 / w, 0);
-    gl.uniform1f(uThr, 0.32);
+    gl.uniform1f(uThr, 0.5);
     gl.uniform1f(uGain, 1.0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     // Pass 2: vertical blur, to the screen.
@@ -105,7 +105,7 @@ export function createBloom(source: HTMLCanvasElement, target: HTMLCanvasElement
     gl.bindTexture(gl.TEXTURE_2D, ping);
     gl.uniform2f(uDir, 0, 1.6 / h);
     gl.uniform1f(uThr, 0);
-    gl.uniform1f(uGain, 1.25);
+    gl.uniform1f(uGain, 1.1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   };
   return { render, resize, ok: true };

@@ -574,7 +574,12 @@ function drawEdgeMarkers(me: Body): void {
   }
 }
 
-function draw(dt: number): void {
+/** World and UI are drawn separately so the bloom can sample the world alone. */
+let uiGhost: Array<{ x: number; y: number }> | null = null;
+const labels: Array<{ text: string; x: number; y: number; hue: string }> = [];
+let uiRoute: { plan: Plan; goal: Goal } | null = null;
+
+function drawWorld(dt: number): void {
   drawBackground();
   const me = human(state);
   const z = zoom();
@@ -664,6 +669,7 @@ function draw(dt: number): void {
 
   // Bodies, big first so lights and orbs sit on top of sun halos.
   const bodies = state.bodies.filter((b) => b.alive).sort((a, b) => b.mass - a.mass);
+  labels.length = 0;
   for (const b of bodies) {
     const [sx, sy] = toScreen(b.x, b.y);
     const target = radiusOf(b.mass, cfg);
@@ -717,12 +723,7 @@ function draw(dt: number): void {
       ctx.arc(sx, sy, r + 5, 0, Math.PI * 2);
       ctx.stroke();
     }
-    if (isLight) {
-      ctx.fillStyle = `hsla(${identity(b)} / 0.9)`;
-      ctx.font = "11px ui-monospace, Menlo, monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(`${b.ai ? b.name + " " : ""}${b.mass.toFixed(b.mass < 10 ? 1 : 0)}`, sx, sy - r - 9);
-    }
+    if (isLight) labels.push({ text: `${b.ai ? b.name + " " : ""}${b.mass.toFixed(b.mass < 10 ? 1 : 0)}`, x: sx, y: sy - r - 9, hue: identity(b) });
   }
 
   // Exhaust puffs.
@@ -738,6 +739,21 @@ function draw(dt: number): void {
     ctx.fill();
   }
 
+  uiGhost = ghost;
+  uiRoute = route;
+}
+
+function drawUi(): void {
+  const me = human(state);
+  const z = zoom();
+  const ghost = uiGhost;
+  const route = uiRoute;
+  ctx.font = "11px ui-monospace, Menlo, monospace";
+  ctx.textAlign = "center";
+  for (const l of labels) {
+    ctx.fillStyle = `hsla(${l.hue} / 0.9)`;
+    ctx.fillText(l.text, l.x, l.y);
+  }
   if (me.alive) drawEdgeMarkers(me);
   drawMinimap(me);
   // The hum: how close the nearest thing that can eat me is, on a 0..1 scale.
@@ -749,7 +765,8 @@ function draw(dt: number): void {
   // Hover: the lumens of whatever is under the cursor.
   if (pointer.inside) {
     let hit: { b: Body; sx: number; sy: number; r: number } | null = null;
-    for (const b of bodies) {
+    for (const b of state.bodies) {
+      if (!b.alive) continue;
       if (b === me) continue;
       const [sx, sy] = toScreen(b.x, b.y);
       const r = Math.max(8, radiusOf(b.mass, cfg) * z * 1.4);
@@ -933,10 +950,11 @@ function frame(now: number): void {
     acc -= DT;
   }
   updateCamera(elapsed);
-  draw(elapsed);
+  drawWorld(elapsed);
   const glowing = bloomBox.checked && bloom.ok;
   glowCanvas.classList.toggle("off", !glowing);
   if (glowing) bloom.render();
+  drawUi();
   hud();
   requestAnimationFrame(frame);
 }
