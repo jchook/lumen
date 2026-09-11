@@ -154,6 +154,12 @@ off screen, larger when closer. The camera zooms out as you grow and whenever yo
 something that can pull or chase you. Manual burns (click toward a direction, farther is harder)
 are behind a toggle in the tuning panel.
 
+**Fair starts.** Every light begins with the same pantry: five orbs of fixed masses in close
+co-orbit, so the opening is the same race for everyone. The board is then scored by how much cheap
+food each light can reach, and rerolled (deterministically from the seed) while the richest start
+has more than 1.5 times the poorest's. Over forty seeds the worst spread is 1.5x; without this it
+was 6x.
+
 **Bots.** `src/sim3/bots.ts`: escape a predicted graze with a heavier body by burning prograde,
 otherwise rehearse a trip to each lighter body in range with the same autopilot the player uses and
 chase the best one whose mass beats the price, committing until it is eaten or has cost more than it
