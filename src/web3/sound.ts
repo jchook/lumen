@@ -49,17 +49,24 @@ const song = {
  */
 type BassStyle = "throb" | "slap" | "pulse";
 const BASS_STYLES: BassStyle[] = ["throb", "slap", "pulse"];
-const BASS: Record<BassStyle, { pattern: number[]; wave: OscillatorType; cutoff: number; q: number; env: number; decay: number; drive: number; sub: number; chorus: number; gain: number }> = {
-  throb: { pattern: [2, 0, 0, 0, 1, 0, 0, 0], wave: "triangle", cutoff: 300, q: 0.8, env: 500, decay: 0.55, drive: 1.6, sub: 0.6, chorus: 0, gain: 0.16 },
-  slap: { pattern: [2, 0, 0, 1, 0, 0, 1, 0], wave: "sawtooth", cutoff: 220, q: 4, env: 1400, decay: 0.16, drive: 2.4, sub: 0.35, chorus: 7, gain: 0.13 },
-  pulse: { pattern: [0, 1, 0, 1, 0, 1, 0, 2], wave: "square", cutoff: 260, q: 2.5, env: 900, decay: 0.12, drive: 3.0, sub: 0.45, chorus: 0, gain: 0.12 },
+/**
+ * A bass note is two strings' worth of sound: a bright layer (saw through a plucked filter) that
+ * dies in `bright` seconds, and a body (fundamental plus sub) that rings for `ring` seconds on its
+ * own clock, regardless of the rhythm. `thumb` is the slap transient; `dip` the pitch drop on the
+ * hit. `drive` is the saturation on the bus.
+ */
+const BASS: Record<BassStyle, { pattern: number[]; cutoff: number; q: number; env: number; bright: number; ring: number; thumb: number; dip: number; drive: number; sub: number; chorus: number; gain: number }> = {
+  throb: { pattern: [2, 0, 0, 0, 1, 0, 0, 0], cutoff: 260, q: 0.9, env: 500, bright: 0.35, ring: 1.3, thumb: 0, dip: 0.015, drive: 1.5, sub: 0.7, chorus: 0, gain: 0.15 },
+  slap: { pattern: [2, 0, 0, 1, 0, 0, 1, 0], cutoff: 240, q: 3.5, env: 1600, bright: 0.18, ring: 0.9, thumb: 0.9, dip: 0.05, drive: 2.2, sub: 0.45, chorus: 6, gain: 0.14 },
+  pulse: { pattern: [0, 1, 0, 1, 0, 1, 0, 2], cutoff: 240, q: 2.2, env: 1000, bright: 0.12, ring: 0.45, thumb: 0.3, dip: 0.03, drive: 2.8, sub: 0.5, chorus: 0, gain: 0.12 },
 };
 
 function applyBassStyle(): void {
   if (!bassFilter || !bassDrive) return;
   const st = BASS[song.bass];
-  bassFilter.frequency.value = st.cutoff;
-  bassFilter.Q.value = st.q;
+  // The bus filter only takes the edge off; each note shapes itself.
+  bassFilter.frequency.value = 1800;
+  bassFilter.Q.value = 0.5;
   const curve = new Float32Array(512);
   for (let i = 0; i < 512; i++) {
     const x = (i / 511) * 2 - 1;
@@ -372,36 +379,69 @@ function playChord(t: number): void {
   }
 }
 
-function playBass(f: number, t: number, dur: number, accent: number): void {
+/** The last bass note's body, so a new note can choke it the way one string does. */
+let lastBass: GainNode | null = null;
+
+function playBass(f: number, t: number, _dur: number, accent: number): void {
   if (!ctx || !bassFilter) return;
   const c = ctx;
   const st = BASS[song.bass];
-  // Per-note filter: opens on the hit, closes over the decay. That's the pluck.
+  const fund = f / 2;
+  // One string at a time: the previous body fades quickly under the new hit.
+  if (lastBass) lastBass.gain.setTargetAtTime(0.0001, t, 0.04);
+
+  // Body: fundamental (triangle) plus sub (sine), ringing out on its own clock.
+  const body = c.createGain();
+  const bodyPeak = st.gain * accent;
+  body.gain.setValueAtTime(0.0001, t);
+  body.gain.exponentialRampToValueAtTime(bodyPeak, t + 0.006);
+  body.gain.setTargetAtTime(0.0001, t + 0.02, st.ring * 0.33);
+  body.connect(bassFilter);
+  lastBass = body;
+  const stop = t + st.ring * 1.6 + 0.2;
+  const voice = (wave: OscillatorType, fr: number, det: number, amp: number, into: AudioNode): void => {
+    const o = c.createOscillator();
+    o.type = wave;
+    o.frequency.setValueAtTime(fr * (1 + st.dip), t);
+    o.frequency.exponentialRampToValueAtTime(fr, t + 0.035);
+    o.detune.value = det;
+    const g = c.createGain();
+    g.gain.value = amp;
+    o.connect(g).connect(into);
+    o.start(t);
+    o.stop(stop);
+  };
+  voice("triangle", fund, 0, 1, body);
+  if (st.sub) voice("sine", fund / 2, 0, st.sub, body);
+
+  // Bright layer: a saw (two if chorused) through a filter that snaps open on the hit and closes
+  // over `bright`; its own amp decays on the same clock so the pluck dies before the body does.
   const filt = c.createBiquadFilter();
   filt.type = "lowpass";
   filt.Q.value = st.q;
   filt.frequency.setValueAtTime(st.cutoff + st.env * accent, t);
-  filt.frequency.exponentialRampToValueAtTime(st.cutoff, t + st.decay);
-  const g = c.createGain();
-  const peak = st.gain * accent;
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
-  g.gain.setTargetAtTime(peak * 0.5, t + 0.03, st.decay * 0.6);
-  g.gain.setTargetAtTime(0.0001, t + dur, 0.06);
-  filt.connect(g).connect(bassFilter);
-  const voices: Array<[OscillatorType, number, number, number]> = [[st.wave, f / 2, 0, 1]];
-  if (st.chorus) voices.push([st.wave, f / 2, st.chorus, 0.6]);
-  if (st.sub) voices.push(["sine", f / 4, 0, st.sub]);
-  for (const [wave, fr, det, amp] of voices) {
-    const o = c.createOscillator();
-    o.type = wave;
-    o.frequency.value = fr;
-    o.detune.value = det;
-    const vg = c.createGain();
-    vg.gain.value = amp;
-    o.connect(vg).connect(filt);
-    o.start(t);
-    o.stop(t + dur + 0.6);
+  filt.frequency.exponentialRampToValueAtTime(st.cutoff, t + st.bright);
+  const bg = c.createGain();
+  bg.gain.setValueAtTime(0.0001, t);
+  bg.gain.exponentialRampToValueAtTime(bodyPeak * 0.9, t + 0.004);
+  bg.gain.setTargetAtTime(0.0001, t + 0.01, st.bright * 0.5);
+  filt.connect(bg).connect(bassFilter);
+  voice("sawtooth", fund, 0, 0.7, filt);
+  if (st.chorus) voice("sawtooth", fund, st.chorus, 0.45, filt);
+
+  // Thumb: a short knock of band-limited noise at the onset.
+  if (st.thumb) {
+    const n = noise(0.04);
+    const bp = c.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 700;
+    bp.Q.value = 1.4;
+    const tg = c.createGain();
+    tg.gain.setValueAtTime(0.0001, t);
+    tg.gain.exponentialRampToValueAtTime(0.12 * st.thumb * accent, t + 0.003);
+    tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    n.connect(bp).connect(tg).connect(bassFilter);
+    n.start(t);
   }
 }
 
