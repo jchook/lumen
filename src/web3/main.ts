@@ -24,7 +24,7 @@ import {
 } from "../sim3";
 import { botTurn, type Memories } from "../sim3/bots";
 import { createBloom } from "./bloom";
-import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFade, soundFlare, soundInit, soundLick, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundThreat } from "./sound";
+import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFade, soundFlare, soundInit, soundLick, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundResume, soundState, soundThreat } from "./sound";
 
 // ---------- config + persistence ----------
 
@@ -136,6 +136,35 @@ let last = performance.now();
 const DT = 1 / 60;
 let hinted = false;
 const log: string[] = [];
+/** Every gesture: create the audio context if needed, then resume it. Both need a user gesture on phones. */
+function wake(): void {
+  soundInit();
+  soundResume();
+}
+const soundBtn = $("sound");
+function showMute(): void {
+  soundBtn.classList.toggle("off", soundMuted());
+  soundBtn.title = soundMuted() ? "sound is off (M)" : "sound is on (M)";
+}
+function toggleMute(): void {
+  soundMute(!soundMuted());
+  try {
+    localStorage.setItem("lumen3.mute", soundMuted() ? "1" : "0");
+  } catch {}
+  showMute();
+  say(soundMuted() ? "sound off" : "sound on");
+}
+showMute();
+soundBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  wake();
+  toggleMute();
+});
+$("newsky").addEventListener("click", (e) => {
+  e.stopPropagation();
+  wake();
+  reset(seed + 1);
+});
 const say = (s: string) => {
   log.unshift(s);
   if (log.length > 12) log.pop();
@@ -330,7 +359,7 @@ canvas.addEventListener("pointerdown", (e) => {
   pointer.y = e.clientY;
   pointer.down = true;
   pointer.inside = true;
-  soundInit();
+  wake();
   if (!hinted) {
     hinted = true;
     hintEl.classList.add("gone");
@@ -341,16 +370,19 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   tap(e.shiftKey);
 });
-window.addEventListener("pointerup", () => (pointer.down = false));
+window.addEventListener("pointerup", () => {
+  pointer.down = false;
+  wake();
+});
+// iOS only unlocks audio on the tail of a touch or a click, not on pointerdown.
+window.addEventListener("touchend", wake, { passive: true });
+window.addEventListener("click", wake);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) soundResume();
+});
 window.addEventListener("keydown", (e) => {
-  soundInit();
-  if (e.key === "m" || e.key === "M") {
-    soundMute(!soundMuted());
-    try {
-      localStorage.setItem("lumen3.mute", soundMuted() ? "1" : "0");
-    } catch {}
-    say(soundMuted() ? "sound off" : "sound on");
-  }
+  wake();
+  if (e.key === "m" || e.key === "M") toggleMute();
   if (e.key === " ") {
     e.preventDefault();
     setGoal(state, human(state).id, null);
@@ -1131,4 +1163,4 @@ say(`seed ${seed} · ${cfg.players - 1} rivals · in ${soundReset(seed)}`);
 cfg.burnGrid = soundBeat() / 4 >= cfg.burnCooldown ? soundBeat() / 4 : soundBeat() / 2;
 
 // Debug hook for headless checks.
-(window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg };
+(window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg, audio: soundState };

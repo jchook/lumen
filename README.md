@@ -176,7 +176,7 @@ never hunts lights, a coward keeps its distance. Nobody hunts lights in the firs
 
 **Sound and glow.** Web Audio, no assets: a tone on absorb that drops with the mass, a thump on
 burn, a hum that swells near anything that can eat you, a chime for a prize, a bell for the round.
-M mutes. Bloom is a WebGL post-process over the Canvas2D scene (`src/web3/bloom.ts`), toggled in the
+M or the ♪ button top right mutes; ↻ beside it starts a new sky. On phones the first tap unlocks audio and a looping silent track lifts the iOS silent switch. Bloom is a WebGL post-process over the Canvas2D scene (`src/web3/bloom.ts`), toggled in the
 tuning panel.
 
 **Fair starts.** Every light begins with the same pantry: five orbs of fixed masses in close

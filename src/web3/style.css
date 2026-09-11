@@ -80,12 +80,45 @@ body {
   opacity: 0;
 }
 
-#panel {
+#tools {
   position: fixed;
   top: 12px;
   right: 12px;
+  display: flex;
+  gap: 8px;
+  z-index: 5;
+}
+
+#tools button {
+  width: 42px;
+  height: 42px;
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid rgba(146, 131, 116, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: manipulation;
+  backdrop-filter: blur(8px);
+}
+
+#tools button:hover {
+  border-color: rgba(146, 131, 116, 0.6);
+}
+
+#tools button.off {
+  color: var(--dim);
+  text-decoration: line-through;
+}
+
+#panel {
+  position: fixed;
+  top: 64px;
+  right: 12px;
   width: 260px;
-  max-height: calc(100vh - 24px);
+  max-height: calc(100vh - 76px);
   overflow-y: auto;
   background: var(--panel);
   border: 1px solid rgba(146, 131, 116, 0.3);

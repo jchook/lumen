@@ -179,11 +179,51 @@ let tension: { o: OscillatorNode; g: GainNode } | null = null;
 let leadDelay: DelayNode | null = null;
 let leadBus: GainNode | null = null;
 
+/**
+ * iOS plays Web Audio through the "ambient" session, which the ring/silent switch mutes. A looping
+ * silent <audio> element started from a user gesture moves the page to the "playback" session,
+ * and Web Audio follows. Harmless elsewhere, so it isn't gated on the user agent.
+ */
+let silentTrack: HTMLAudioElement | null = null;
+function unlockSilentSwitch(): void {
+  if (silentTrack) return;
+  try {
+    // 0.1 s of 8-bit mono silence as a WAV: a 44-byte header plus 800 mid-point samples.
+    const n = 800;
+    const buf = new Uint8Array(44 + n);
+    const dv = new DataView(buf.buffer);
+    const tag = (o: number, t: string) => { for (let i = 0; i < t.length; i++) buf[o + i] = t.charCodeAt(i); };
+    tag(0, "RIFF"); dv.setUint32(4, 36 + n, true); tag(8, "WAVE"); tag(12, "fmt ");
+    dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+    dv.setUint32(24, 8000, true); dv.setUint32(28, 8000, true); dv.setUint16(32, 1, true); dv.setUint16(34, 8, true);
+    tag(36, "data"); dv.setUint32(40, n, true);
+    buf.fill(128, 44);
+    const a = new Audio(URL.createObjectURL(new Blob([buf], { type: "audio/wav" })));
+    a.loop = true;
+    a.setAttribute("playsinline", "");
+    a.volume = 0.01;
+    a.play().catch(() => {});
+    silentTrack = a;
+    document.addEventListener("visibilitychange", () => {
+      if (!silentTrack) return;
+      if (document.hidden) silentTrack.pause();
+      else silentTrack.play().catch(() => {});
+    });
+  } catch {}
+}
+
+/** Call from any user gesture: browsers start the context suspended until one, and phones suspend it again on interruptions. */
+export function soundResume(): void {
+  unlockSilentSwitch();
+  if (ctx && ctx.state !== "running") ctx.resume().catch(() => {});
+}
+
 export function soundInit(): void {
   if (ctx) return;
   try {
     ctx = new AudioContext();
     const c = ctx;
+    if (c.state !== "running") c.resume().catch(() => {});
     const comp = c.createDynamicsCompressor();
     comp.threshold.value = -16;
     comp.knee.value = 10;
@@ -346,6 +386,8 @@ export function soundMute(on: boolean): void {
   if (master && ctx) master.gain.setTargetAtTime(on ? 0 : 0.6, ctx.currentTime, 0.05);
 }
 export const soundMuted = (): boolean => muted;
+/** "none" before the first gesture, then the AudioContext state. */
+export const soundState = (): string => ctx?.state ?? "none";
 
 // ---------- the clock: chords, pad, bass ----------
 
