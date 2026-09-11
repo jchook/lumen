@@ -438,7 +438,7 @@ function schedule(): void {
   }
 }
 
-function playChord(t: number): void {
+function playChord(t: number, attack = 0.9): void {
   if (!ctx || !padFilter) return;
   const c = ctx;
   // Release the old voices.
@@ -464,7 +464,7 @@ function playChord(t: number): void {
     if (flutter) flutter.connect(o.detune);
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.setTargetAtTime(gain * (1 - ducked * 0.6), t, 0.9);
+    g.gain.setTargetAtTime(gain * (1 - ducked * 0.6), t, attack);
     o.connect(g).connect(padFilter!);
     o.start(t);
     padVoices.push({ o, g });
@@ -891,7 +891,36 @@ export function soundLost(): void {
   const t = c.currentTime;
   stopped = true;
   const slow = 1.5;
-  for (const o of tapeVoices()) {
+  // Make sure the tape has something to grab: whatever was sounding, plus the chord struck now,
+  // full and fast, and a root bass note. Otherwise a death between notes is a silent second.
+  const wasSounding = tapeVoices();
+  for (const v of padVoices) {
+    hold(v.g.gain, t);
+    v.g.gain.setTargetAtTime(0.03, t, 0.02);
+  }
+  playChord(t, 0.03);
+  if (duck) {
+    hold(duck.gain, t);
+    duck.gain.setTargetAtTime(1, t, 0.02);
+  }
+  if (bassDuck) {
+    hold(bassDuck.gain, t);
+    bassDuck.gain.setTargetAtTime(1, t, 0.02);
+  }
+  playBass(freq(song.chord - 7, 4), t, 1, slow, false);
+  const grab = noise(0.12);
+  const grabBp = c.createBiquadFilter();
+  grabBp.type = "bandpass";
+  grabBp.frequency.value = 900;
+  grabBp.Q.value = 0.7;
+  const grabG = c.createGain();
+  grabG.gain.setValueAtTime(0.0001, t);
+  grabG.gain.exponentialRampToValueAtTime(0.09, t + 0.004);
+  grabG.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+  grab.connect(grabBp).connect(grabG).connect(dry);
+  grab.start(t);
+  const voices = new Set<OscillatorNode>([...wasSounding, ...tapeVoices()]);
+  for (const o of voices) {
     hold(o.detune, t);
     o.detune.linearRampToValueAtTime(o.detune.value - 3000, t + slow);
   }
