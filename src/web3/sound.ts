@@ -762,11 +762,29 @@ function leadVoice(f: number, t: number, dur: number, peak: number, opts: { brig
 }
 
 /**
- * One meal, one note of the current motif, but how it's played says how big the meal was:
- *   speck  (< 1):   a short high blip, barely there.
- *   morsel (1–4):   the lead note.
- *   meal   (4–12):  the note with a fifth under it, longer, brighter.
- *   prize  (12+):   a full chord stab an octave down with a sub thump and a sparkle on top.
+ * A short run that lands on `deg`: an approach from below by scale steps, each note gliding into
+ * the next, the last held. `steps` is the approach length. Partial licks for the bigger meals.
+ */
+function miniLick(deg: number, oct: number, steps: number, holdSec: number, peak: number, vibrato: number): void {
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  const six = beat() / 4;
+  const approach = [-7, -5, -4, -2, -1].slice(-steps);
+  const run = [...approach, 0];
+  run.forEach((rel, i) => {
+    const t = t0 + i * six * 0.5;
+    const last = i === run.length - 1;
+    leadVoice(freq(deg + rel, oct), t, last ? holdSec : six * 0.55, last ? peak : peak * 0.8, { bright: 1.2, glideFrom: i > 0 ? 0.95 : undefined, vibrato: last ? vibrato : 0 });
+  });
+}
+
+/**
+ * One meal, one note of the current motif. Small meals are the melody itself, note for note.
+ * Bigger meals arrive with a run-up that lands on that same note, longer as the meal grows, so
+ * the phrase stays in the song and the size is still heard:
+ *   speck, morsel (< 4):  the note.
+ *   meal   (4–12):        a three-note run into the note.
+ *   prize  (12+):         a five-note run, the note held with vibrato, and a sub thump.
  */
 export function soundAbsorb(mass: number): void {
   if (!ctx || !leadBus) return;
@@ -780,23 +798,15 @@ export function soundAbsorb(mass: number): void {
   if (lead.i >= motif.length) nextMotif();
   const deg = song.chord + rel;
   const t = now;
-  if (mass < 1) {
-    leadVoice(freq(deg, 4), t, 0.12, 0.05, { short: true, bright: 1.3 });
-    return;
-  }
   if (mass < 4) {
-    leadVoice(freq(deg, 3), t, 0.5 + mass * 0.05, 0.09, {});
+    leadVoice(freq(deg, 3), t, 0.45 + mass * 0.06, 0.08 + mass * 0.005, {});
     return;
   }
   if (mass < 12) {
-    leadVoice(freq(deg, 3), t, 0.8 + mass * 0.04, 0.1, { bright: 1.2 });
-    leadVoice(freq(deg - 4, 3), t + 0.01, 0.8 + mass * 0.04, 0.06, {});
+    miniLick(deg, 3, 3, 0.9, 0.11, 0);
     return;
   }
-  // A prize: stab the chord, low, with weight and a sparkle.
-  const tones = [song.chord, song.chord + 2, song.chord + 4];
-  tones.forEach((d, i) => leadVoice(freq(d, 2), t + i * 0.012, 1.4, 0.09, { bright: 1.3 }));
-  leadVoice(freq(song.chord, 4), t + 0.05, 0.6, 0.05, { short: true, bright: 1.4 });
+  miniLick(deg, 3, 5, 1.6, 0.13, 22);
   if (dry) {
     const sub = c.createOscillator();
     sub.type = "sine";
@@ -804,7 +814,7 @@ export function soundAbsorb(mass: number): void {
     sub.frequency.exponentialRampToValueAtTime(freq(song.chord, 1), t + 0.25);
     const sg = c.createGain();
     sg.gain.setValueAtTime(0.0001, t);
-    sg.gain.exponentialRampToValueAtTime(0.28, t + 0.01);
+    sg.gain.exponentialRampToValueAtTime(0.26, t + 0.01);
     sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
     sub.connect(sg).connect(dry);
     sub.start(t);
