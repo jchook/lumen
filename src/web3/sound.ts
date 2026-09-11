@@ -38,35 +38,31 @@ const song = {
   chord: 0, // scale degree the current chord is built on
   bpm: 66,
   seed: 1,
-  bass: "throb" as BassStyle,
+  bass: "deep" as BassStyle,
+  swing: 0.1, // fraction of an eighth the off-beats are pushed late
 };
 
 /**
- * Bass styles. `pattern` is which eighths of a four-beat bar it plays (1 = hit, 2 = accent).
- *   throb: long, round, on the beat.
- *   slap:  short, plucky, tresillo rhythm, a little chorus.
- *   pulse: off-beat eighths, tight and driven: the trance engine.
+ * Bass styles. `pattern` is what plays on each eighth of a four-beat bar:
+ *   0 rest · 0.4 ghost · 1 hit · 2 accent · 3 hit an octave up (the disco bounce).
+ *   deep:   long, round, on the beat, with ghosts.
+ *   funk:   tresillo with ghost notes, plucky, a little chorus, a thumb.
+ *   bounce: root and octave alternating on every eighth, tight and driven: Lights, Voyager.
+ * The voice is one mono synth: envelopes retrigger, notes glide, nothing is ever cut.
  */
-type BassStyle = "throb" | "slap" | "pulse";
-const BASS_STYLES: BassStyle[] = ["throb", "slap", "pulse"];
-/**
- * A bass note is two strings' worth of sound: a bright layer (saw through a plucked filter) that
- * dies in `bright` seconds, and a body (fundamental plus sub) that rings for `ring` seconds on its
- * own clock, regardless of the rhythm. `thumb` is the slap transient; `dip` the pitch drop on the
- * hit. `drive` is the saturation on the bus.
- */
-const BASS: Record<BassStyle, { pattern: number[]; cutoff: number; q: number; env: number; bright: number; ring: number; thumb: number; dip: number; drive: number; sub: number; chorus: number; gain: number }> = {
-  throb: { pattern: [2, 0, 0, 0, 1, 0, 0, 0], cutoff: 260, q: 0.9, env: 500, bright: 0.35, ring: 1.3, thumb: 0, dip: 0.015, drive: 1.5, sub: 0.7, chorus: 0, gain: 0.15 },
-  slap: { pattern: [2, 0, 0, 1, 0, 0, 1, 0], cutoff: 240, q: 3.5, env: 1600, bright: 0.18, ring: 0.9, thumb: 0.9, dip: 0.05, drive: 2.2, sub: 0.45, chorus: 6, gain: 0.14 },
-  pulse: { pattern: [0, 1, 0, 1, 0, 1, 0, 2], cutoff: 240, q: 2.2, env: 1000, bright: 0.12, ring: 0.45, thumb: 0.3, dip: 0.03, drive: 2.8, sub: 0.5, chorus: 0, gain: 0.12 },
+type BassStyle = "deep" | "funk" | "bounce";
+const BASS_STYLES: BassStyle[] = ["deep", "funk", "bounce"];
+const BASS: Record<BassStyle, { pattern: number[]; cutoff: number; q: number; env: number; bright: number; ring: number; thumb: number; dip: number; drive: number; sub: number; chorus: number; gain: number; glide: number }> = {
+  deep: { pattern: [2, 0, 0.4, 0, 1, 0, 0.4, 0], cutoff: 240, q: 0.9, env: 500, bright: 0.35, ring: 1.2, thumb: 0, dip: 0.015, drive: 1.5, sub: 0.7, chorus: 0, gain: 0.15, glide: 0.03 },
+  funk: { pattern: [2, 0, 0.4, 1, 0, 0.4, 1, 0.4], cutoff: 230, q: 3.2, env: 1500, bright: 0.18, ring: 0.8, thumb: 0.9, dip: 0.05, drive: 2.2, sub: 0.45, chorus: 6, gain: 0.14, glide: 0.012 },
+  bounce: { pattern: [1, 3, 1, 3, 1, 3, 2, 3], cutoff: 230, q: 2.0, env: 1000, bright: 0.11, ring: 0.4, thumb: 0.25, dip: 0.03, drive: 2.6, sub: 0.5, chorus: 4, gain: 0.12, glide: 0.006 },
 };
 
 function applyBassStyle(): void {
-  if (!bassFilter || !bassDrive) return;
+  if (!mono || !bassDrive) return;
   const st = BASS[song.bass];
-  // The bus filter only takes the edge off; each note shapes itself.
-  bassFilter.frequency.value = 1800;
-  bassFilter.Q.value = 0.5;
+  mono.vcf.Q.value = st.q;
+  mono.brightOscs[1]!.detune.value = st.chorus || 0;
   const curve = new Float32Array(512);
   for (let i = 0; i < 512; i++) {
     const x = (i / 511) * 2 - 1;
@@ -97,10 +93,11 @@ export function soundKey(seed: number): string {
   song.mode = MODES[song.modeName]!;
   song.bpm = 56 + Math.floor(r() * 30);
   song.bass = BASS_STYLES[Math.floor(r() * BASS_STYLES.length)]!;
+  song.swing = 0.07 + r() * 0.1;
   song.chord = 0;
   lead.motif = Math.floor(r() * MOTIFS.length);
   lead.i = 0;
-  return `${NOTE_NAMES[song.root]} ${song.modeName} · ${song.bpm} bpm · ${song.bass} bass`;
+  return `${NOTE_NAMES[song.root]} ${song.modeName} · ${song.bpm} bpm · ${song.bass} bass · swing ${Math.round(50 + song.swing * 50)}%`;
 }
 
 /** Frequency of scale degree `deg` (any integer; 7 per octave) in octave `oct` (C4 = 261.6 is oct 4). */
@@ -145,9 +142,14 @@ let padPump: GainNode | null = null;
 let wobble: GainNode | null = null;
 let flutter: GainNode | null = null;
 let padVoices: Array<{ o: OscillatorNode; g: GainNode }> = [];
-let bassFilter: BiquadFilterNode | null = null;
-let bassDrive: WaveShaperNode | null = null;
+// The mixer: one bus per instrument into the master compressor. Pad and lead go through the
+// sidechain duck, keyed from the kick, so the whole mix breathes with the beat.
+let duck: GainNode | null = null;
+let drumBus: GainNode | null = null;
 let bassBus: GainNode | null = null;
+let bassDrive: WaveShaperNode | null = null;
+/** The bass is one monophonic synth. */
+let mono: { oscs: OscillatorNode[]; vcf: BiquadFilterNode; vca: GainNode; bright: GainNode; brightOscs: OscillatorNode[] } | null = null;
 let tension: { o: OscillatorNode; g: GainNode } | null = null;
 let leadDelay: DelayNode | null = null;
 let leadBus: GainNode | null = null;
@@ -168,6 +170,12 @@ export function soundInit(): void {
     comp.connect(master).connect(c.destination);
     dry = c.createGain();
     dry.connect(comp);
+    duck = c.createGain();
+    duck.gain.value = 1;
+    duck.connect(comp);
+    drumBus = c.createGain();
+    drumBus.gain.value = 0.9;
+    drumBus.connect(comp);
     const verb = c.createConvolver();
     verb.buffer = impulse(3.4, 2.4);
     const verbTone = c.createBiquadFilter();
@@ -194,12 +202,11 @@ export function soundInit(): void {
     const padHp = c.createBiquadFilter();
     padHp.type = "highpass";
     padHp.frequency.value = 95;
-    padPump = c.createGain();
-    padPump.gain.value = 1;
+    padPump = null;
     padBus = c.createGain();
     padBus.gain.value = 0.9;
-    padFilter.connect(padDrive).connect(padHp).connect(padPump).connect(padBus);
-    padBus.connect(dry);
+    padFilter.connect(padDrive).connect(padHp).connect(padBus);
+    padBus.connect(duck);
     padBus.connect(send);
     const lfo = c.createOscillator();
     lfo.frequency.value = 0.06;
@@ -220,15 +227,42 @@ export function soundInit(): void {
     flutter.gain.value = 2.5; // cents
     flt.connect(flutter);
     flt.start();
-    // Bass chain: filter → drive → bus. The style sets the numbers.
-    bassFilter = c.createBiquadFilter();
-    bassFilter.type = "lowpass";
-    bassFilter.frequency.value = 380;
-    bassFilter.Q.value = 1.1;
+    // Bass: one mono synth. Oscillators run forever; notes retrigger the envelopes and glide the
+    // pitch, so nothing ever clicks or cuts. body (tri + sub) → vca; saws → vcf → bright → vca.
+    const vca = c.createGain();
+    vca.gain.value = 0.0001;
     bassDrive = c.createWaveShaper();
+    bassDrive.oversample = "2x";
+    const bassTone = c.createBiquadFilter();
+    bassTone.type = "lowpass";
+    bassTone.frequency.value = 1800;
+    bassTone.Q.value = 0.5;
     bassBus = c.createGain();
     bassBus.gain.value = 1;
-    bassFilter.connect(bassDrive).connect(bassBus).connect(dry);
+    vca.connect(bassDrive).connect(bassTone).connect(bassBus).connect(comp);
+    const vcf = c.createBiquadFilter();
+    vcf.type = "lowpass";
+    const bright = c.createGain();
+    bright.gain.value = 0.0001;
+    vcf.connect(bright).connect(vca);
+    const mk = (type: OscillatorType, amp: number, into: AudioNode, det = 0): OscillatorNode => {
+      const o = c.createOscillator();
+      o.type = type;
+      o.frequency.value = 55;
+      o.detune.value = det;
+      const g = c.createGain();
+      g.gain.value = amp;
+      o.connect(g).connect(into);
+      o.start();
+      return o;
+    };
+    mono = {
+      oscs: [mk("triangle", 1, vca), mk("sine", 0.6, vca)],
+      brightOscs: [mk("sawtooth", 0.7, vcf), mk("sawtooth", 0.45, vcf, 5)],
+      vcf,
+      vca,
+      bright,
+    };
     applyBassStyle();
     // Tension: a tone a step above the chord root, silent until something can eat you.
     const to = c.createOscillator();
@@ -240,10 +274,10 @@ export function soundInit(): void {
     to.start();
     tension = { o: to, g: tg };
 
-    // Lead: through a dotted-eighth delay so single notes become phrases.
+    // Lead: through a dotted-eighth delay so single notes become phrases. Ducked with the pad.
     leadBus = c.createGain();
-    leadBus.gain.value = 1;
-    leadBus.connect(dry);
+    leadBus.gain.value = 0.85;
+    leadBus.connect(duck);
     const toVerb = c.createGain();
     toVerb.gain.value = 0.5;
     leadBus.connect(toVerb).connect(send);
@@ -258,7 +292,7 @@ export function soundInit(): void {
     leadDelay.connect(fbTone).connect(fb).connect(leadDelay);
     const wet = c.createGain();
     wet.gain.value = 0.45;
-    leadDelay.connect(wet).connect(dry);
+    leadDelay.connect(wet).connect(duck);
     wet.connect(send);
 
     startClock();
@@ -307,10 +341,11 @@ function schedule(): void {
   if (!ctx) return;
   const eighth = beat() / 2;
   while (nextEighth < ctx.currentTime + 0.3) {
-    const t = nextEighth;
     const i = eighthIndex;
-    const r = hash((song.seed * 31 + i * 17) >>> 0);
     const inBar = i % 8;
+    // Swing: off-beat eighths land late. That's the pocket.
+    const t = nextEighth + (inBar % 2 === 1 ? eighth * song.swing : 0);
+    const r = hash((song.seed * 31 + i * 17) >>> 0);
     // Harmonic rhythm: a new chord every two bars.
     if (i > 0 && i % 16 === 0) {
       const options = NEXT[song.chord] ?? CHORDS;
@@ -322,25 +357,33 @@ function schedule(): void {
     const st = BASS[song.bass];
     const hit = st.pattern[inBar]!;
     if (hit) {
-      const roll = r();
-      if (roll < 0.5) bass.degree += r() < 0.5 ? 1 : -1;
-      else if (roll < 0.85) {
-        const tones = chordTones().map((d) => d - 7).sort((a, b) => Math.abs(a - bass.degree) - Math.abs(b - bass.degree));
-        bass.degree = tones[0]!;
+      // Ghosts and octave hits don't move the line; real hits wander, fond of chord tones.
+      if (hit >= 1 && hit !== 3) {
+        const roll = r();
+        if (roll < 0.5) bass.degree += r() < 0.5 ? 1 : -1;
+        else if (roll < 0.85) {
+          const tones = chordTones().map((d) => d - 7).sort((a, b) => Math.abs(a - bass.degree) - Math.abs(b - bass.degree));
+          bass.degree = tones[0]!;
+        }
+        if (bass.degree < -10) bass.degree += 7;
+        if (bass.degree > -2) bass.degree -= 7;
+        if (i % 16 === 0) bass.degree = song.chord - 7;
       }
-      if (bass.degree < -10) bass.degree += 7;
-      if (bass.degree > -2) bass.degree -= 7;
-      if (i % 16 === 0) bass.degree = song.chord - 7;
-      playBass(freq(bass.degree, 4), t, eighth * (hit === 2 ? 1.6 : 1.0), hit === 2 ? 1 : 0.8);
+      const deg = hit === 3 ? bass.degree + 7 : bass.degree;
+      const accent = hit === 2 ? 1 : hit === 3 ? 0.75 : hit < 1 ? 0.35 : 0.8;
+      playBass(freq(deg, 4), t, accent);
     }
+    // Four on the floor, quiet, and it keys the sidechain. Hats on the swung off-beats.
+    if (inBar % 2 === 0) {
+      kick(t, inBar === 0 ? 1 : 0.85);
+      if (duck) {
+        duck.gain.cancelScheduledValues(t);
+        duck.gain.setValueAtTime(0.45, t);
+        duck.gain.linearRampToValueAtTime(1.0, t + beat() * 0.55);
+      }
+    } else hat(t, inBar === 7 ? 0.7 : 0.5);
     // Threat: a low pulse on the root every eighth, harder as it gets closer.
     if (threat > 0.12) playPulse(freq(0, 2), t, threat, inBar % 2 === 0);
-    // The pump, on each beat.
-    if (padPump && inBar % 2 === 0) {
-      padPump.gain.cancelScheduledValues(t);
-      padPump.gain.setValueAtTime(0.42, t);
-      padPump.gain.linearRampToValueAtTime(1.0, t + beat() * 0.6);
-    }
     nextEighth += eighth;
     eighthIndex++;
   }
@@ -379,58 +422,49 @@ function playChord(t: number): void {
   }
 }
 
-/** The last bass note's body, so a new note can choke it the way one string does. */
-let lastBass: GainNode | null = null;
+/** Retrigger a param from wherever it is right now, without a jump. */
+function hold(p: AudioParam, t: number): void {
+  const anyP = p as AudioParam & { cancelAndHoldAtTime?: (t: number) => void };
+  if (anyP.cancelAndHoldAtTime) anyP.cancelAndHoldAtTime(t);
+  else {
+    p.cancelScheduledValues(t);
+    p.setValueAtTime(p.value, t);
+  }
+}
 
-function playBass(f: number, t: number, _dur: number, accent: number): void {
-  if (!ctx || !bassFilter) return;
-  const c = ctx;
+/** One note on the mono bass: glide to the pitch, retrigger filter and amp envelopes. */
+function playBass(f: number, t: number, accent: number): void {
+  if (!ctx || !mono) return;
   const st = BASS[song.bass];
   const fund = f / 2;
-  // One string at a time: the previous body fades quickly under the new hit.
-  if (lastBass) lastBass.gain.setTargetAtTime(0.0001, t, 0.04);
-
-  // Body: fundamental (triangle) plus sub (sine), ringing out on its own clock.
-  const body = c.createGain();
-  const bodyPeak = st.gain * accent;
-  body.gain.setValueAtTime(0.0001, t);
-  body.gain.exponentialRampToValueAtTime(bodyPeak, t + 0.006);
-  body.gain.setTargetAtTime(0.0001, t + 0.02, st.ring * 0.33);
-  body.connect(bassFilter);
-  lastBass = body;
-  const stop = t + st.ring * 1.6 + 0.2;
-  const voice = (wave: OscillatorType, fr: number, det: number, amp: number, into: AudioNode): void => {
-    const o = c.createOscillator();
-    o.type = wave;
-    o.frequency.setValueAtTime(fr * (1 + st.dip), t);
-    o.frequency.exponentialRampToValueAtTime(fr, t + 0.035);
-    o.detune.value = det;
-    const g = c.createGain();
-    g.gain.value = amp;
-    o.connect(g).connect(into);
-    o.start(t);
-    o.stop(stop);
-  };
-  voice("triangle", fund, 0, 1, body);
-  if (st.sub) voice("sine", fund / 2, 0, st.sub, body);
-
-  // Bright layer: a saw (two if chorused) through a filter that snaps open on the hit and closes
-  // over `bright`; its own amp decays on the same clock so the pluck dies before the body does.
-  const filt = c.createBiquadFilter();
-  filt.type = "lowpass";
-  filt.Q.value = st.q;
-  filt.frequency.setValueAtTime(st.cutoff + st.env * accent, t);
-  filt.frequency.exponentialRampToValueAtTime(st.cutoff, t + st.bright);
-  const bg = c.createGain();
-  bg.gain.setValueAtTime(0.0001, t);
-  bg.gain.exponentialRampToValueAtTime(bodyPeak * 0.9, t + 0.004);
-  bg.gain.setTargetAtTime(0.0001, t + 0.01, st.bright * 0.5);
-  filt.connect(bg).connect(bassFilter);
-  voice("sawtooth", fund, 0, 0.7, filt);
-  if (st.chorus) voice("sawtooth", fund, st.chorus, 0.45, filt);
-
+  const pitches: Array<[OscillatorNode, number]> = [
+    [mono.oscs[0]!, fund],
+    [mono.oscs[1]!, fund / 2],
+    [mono.brightOscs[0]!, fund],
+    [mono.brightOscs[1]!, fund],
+  ];
+  for (const [o, fr] of pitches) {
+    hold(o.frequency, t);
+    o.frequency.setTargetAtTime(fr * (1 + st.dip), t, st.glide);
+    o.frequency.setTargetAtTime(fr, t + 0.03, 0.02);
+  }
+  // Filter: snaps open on the hit, closes over `bright`.
+  hold(mono.vcf.frequency, t);
+  mono.vcf.frequency.setTargetAtTime(st.cutoff + st.env * accent, t, 0.002);
+  mono.vcf.frequency.setTargetAtTime(st.cutoff, t + 0.01, st.bright * 0.4);
+  // Bright layer amp: dies on the same clock as the filter.
+  hold(mono.bright.gain, t);
+  mono.bright.gain.setTargetAtTime(0.9, t, 0.003);
+  mono.bright.gain.setTargetAtTime(0.0001, t + 0.012, st.bright * 0.45);
+  // Body amp: peaks fast, rings out on its own clock.
+  const peak = st.gain * accent;
+  hold(mono.vca.gain, t);
+  mono.vca.gain.setTargetAtTime(peak, t, 0.004);
+  mono.vca.gain.setTargetAtTime(0.0001, t + 0.02, st.ring * 0.33);
+  // Sub and chorus levels per style.
   // Thumb: a short knock of band-limited noise at the onset.
-  if (st.thumb) {
+  if (st.thumb && bassBus) {
+    const c = ctx;
     const n = noise(0.04);
     const bp = c.createBiquadFilter();
     bp.type = "bandpass";
@@ -438,16 +472,60 @@ function playBass(f: number, t: number, _dur: number, accent: number): void {
     bp.Q.value = 1.4;
     const tg = c.createGain();
     tg.gain.setValueAtTime(0.0001, t);
-    tg.gain.exponentialRampToValueAtTime(0.12 * st.thumb * accent, t + 0.003);
+    tg.gain.exponentialRampToValueAtTime(0.1 * st.thumb * accent, t + 0.003);
     tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
-    n.connect(bp).connect(tg).connect(bassFilter);
+    n.connect(bp).connect(tg).connect(bassBus);
     n.start(t);
   }
 }
 
+/** The floor: a soft kick, more felt than heard. */
+function kick(t: number, level: number): void {
+  if (!ctx || !drumBus) return;
+  const c = ctx;
+  const o = c.createOscillator();
+  o.type = "sine";
+  o.frequency.setValueAtTime(150, t);
+  o.frequency.exponentialRampToValueAtTime(42, t + 0.09);
+  const g = c.createGain();
+  const peak = 0.22 * level;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(peak, t + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+  o.connect(g).connect(drumBus);
+  o.start(t);
+  o.stop(t + 0.32);
+  const n = noise(0.02);
+  const hp = c.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 2500;
+  const cg = c.createGain();
+  cg.gain.setValueAtTime(0.0001, t);
+  cg.gain.exponentialRampToValueAtTime(0.03 * level, t + 0.002);
+  cg.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
+  n.connect(hp).connect(cg).connect(drumBus);
+  n.start(t);
+}
+
+/** A closed hat on the swung off-beats: filtered noise, very short. */
+function hat(t: number, level: number): void {
+  if (!ctx || !drumBus) return;
+  const c = ctx;
+  const n = noise(0.06);
+  const hp = c.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 7000;
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.035 * level, t + 0.002);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+  n.connect(hp).connect(g).connect(drumBus);
+  n.start(t);
+}
+
 /** The threat pulse: a short, dark thud on the root, in the bass chain. */
 function playPulse(f: number, t: number, level: number, strong: boolean): void {
-  if (!ctx || !bassFilter) return;
+  if (!ctx || !drumBus) return;
   const c = ctx;
   const o = c.createOscillator();
   o.type = "sine";
@@ -458,7 +536,7 @@ function playPulse(f: number, t: number, level: number, strong: boolean): void {
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.006);
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
-  o.connect(g).connect(bassFilter);
+  o.connect(g).connect(drumBus);
   o.start(t);
   o.stop(t + 0.15);
 }
@@ -643,7 +721,7 @@ export function soundBurn(strength: number): void {
   bg.gain.setValueAtTime(0.0001, t);
   bg.gain.exponentialRampToValueAtTime(peak, t + 0.006);
   bg.gain.exponentialRampToValueAtTime(0.0001, t + life);
-  body.connect(drive).connect(bg).connect(dry);
+  body.connect(drive).connect(bg).connect(drumBus ?? dry);
   const toVerb = c.createGain();
   toVerb.gain.value = down ? 0.25 : 0.12;
   bg.connect(toVerb).connect(send);
@@ -659,7 +737,7 @@ export function soundBurn(strength: number): void {
   cg.gain.setValueAtTime(0.0001, t);
   cg.gain.exponentialRampToValueAtTime((off ? 0.05 : 0.07) * (0.4 + 0.6 * k), t + 0.003);
   cg.gain.exponentialRampToValueAtTime(0.0001, t + (off ? 0.03 : 0.045));
-  click.connect(hp).connect(cg).connect(dry);
+  click.connect(hp).connect(cg).connect(drumBus ?? dry);
   click.start(t);
 }
 
