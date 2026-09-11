@@ -704,9 +704,69 @@ function nextMotif(): void {
   lead.i = 0;
 }
 
+/** The lead voice: square + detuned saw + sub sine through a plucked filter and light drive. */
+function leadVoice(f: number, t: number, dur: number, peak: number, opts: { bright?: number; glideFrom?: number; vibrato?: number; short?: boolean } = {}): void {
+  if (!ctx || !leadBus) return;
+  const c = ctx;
+  const bright = opts.bright ?? 1;
+  const filt = c.createBiquadFilter();
+  filt.type = "lowpass";
+  filt.Q.value = 2.2;
+  filt.frequency.setValueAtTime(Math.min(3200, f * 5 * bright), t);
+  filt.frequency.exponentialRampToValueAtTime(Math.max(240, f * 1.3), t + (opts.short ? 0.12 : 0.4));
+  const drive = c.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const x = (i / 255) * 2 - 1;
+    curve[i] = Math.tanh(x * 1.5) / Math.tanh(1.5);
+  }
+  drive.curve = curve;
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(peak, t + 0.01);
+  g.gain.setTargetAtTime(peak * (opts.short ? 0.3 : 0.6), t + 0.05, opts.short ? 0.06 : 0.2);
+  g.gain.setTargetAtTime(0.0001, t + dur, opts.short ? 0.05 : 0.15);
+  filt.connect(drive).connect(g).connect(leadBus);
+  const layers: Array<[OscillatorType, number, number, number]> = [
+    ["square", f, rnd(-3, 3), 0.55],
+    ["sawtooth", f, rnd(6, 11), 0.35],
+    ["sine", f / 2, 0, 0.5],
+  ];
+  let vib: OscillatorNode | null = null;
+  let vibG: GainNode | null = null;
+  if (opts.vibrato) {
+    vib = c.createOscillator();
+    vib.frequency.value = 5.5;
+    vibG = c.createGain();
+    vibG.gain.setValueAtTime(0, t);
+    vibG.gain.linearRampToValueAtTime(opts.vibrato, t + 0.35);
+    vib.connect(vibG);
+    vib.start(t);
+    vib.stop(t + dur + 0.9);
+  }
+  for (const [type, fr, det, amp] of layers) {
+    const o = c.createOscillator();
+    o.type = type;
+    if (opts.glideFrom) {
+      o.frequency.setValueAtTime(fr * opts.glideFrom, t);
+      o.frequency.exponentialRampToValueAtTime(fr, t + 0.06);
+    } else o.frequency.value = fr;
+    o.detune.value = det;
+    if (vibG) vibG.connect(o.detune);
+    const lg = c.createGain();
+    lg.gain.value = amp;
+    o.connect(lg).connect(filt);
+    o.start(t);
+    o.stop(t + dur + 0.9);
+  }
+}
+
 /**
- * One lead note per meal, the next note of the current motif. A long pause starts a fresh motif.
- * Register is kept low: specks an octave above the riff, prizes an octave below, never shrill.
+ * One meal, one note of the current motif, but how it's played says how big the meal was:
+ *   speck  (< 1):   a short high blip, barely there.
+ *   morsel (1–4):   the lead note.
+ *   meal   (4–12):  the note with a fifth under it, longer, brighter.
+ *   prize  (12+):   a full chord stab an octave down with a sub thump and a sparkle on top.
  */
 export function soundAbsorb(mass: number): void {
   if (!ctx || !leadBus) return;
@@ -719,45 +779,80 @@ export function soundAbsorb(mass: number): void {
   lead.i++;
   if (lead.i >= motif.length) nextMotif();
   const deg = song.chord + rel;
-  const oct = mass < 1 ? 4 : mass < 12 ? 3 : 2;
-  const f = freq(deg, oct);
-  const dur = 0.45 + Math.min(1.0, mass * 0.05);
   const t = now;
-  // Three layers: a square, a detuned saw for width, and a sine an octave under for weight.
-  const layers: Array<[OscillatorType, number, number, number]> = [
-    ["square", f, rnd(-3, 3), 0.55],
-    ["sawtooth", f, rnd(6, 11), 0.35],
-    ["sine", f / 2, 0, 0.5],
-  ];
-  const filt = c.createBiquadFilter();
-  filt.type = "lowpass";
-  filt.Q.value = 2.2;
-  filt.frequency.setValueAtTime(Math.min(3200, f * 5), t);
-  filt.frequency.exponentialRampToValueAtTime(Math.max(240, f * 1.3), t + 0.4);
-  const drive = c.createWaveShaper();
-  const curve = new Float32Array(256);
-  for (let i = 0; i < 256; i++) {
-    const x = (i / 255) * 2 - 1;
-    curve[i] = Math.tanh(x * 1.5) / Math.tanh(1.5);
+  if (mass < 1) {
+    leadVoice(freq(deg, 4), t, 0.12, 0.05, { short: true, bright: 1.3 });
+    return;
   }
-  drive.curve = curve;
-  const g = c.createGain();
-  const peak = 0.08 + Math.min(0.07, mass * 0.007);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(peak, t + 0.01);
-  g.gain.setTargetAtTime(peak * 0.6, t + 0.05, 0.2);
-  g.gain.setTargetAtTime(0.0001, t + dur, 0.15);
-  filt.connect(drive).connect(g).connect(leadBus);
-  for (const [type, fr, det, amp] of layers) {
-    const o = c.createOscillator();
-    o.type = type;
-    o.frequency.value = fr;
-    o.detune.value = det;
-    const lg = c.createGain();
-    lg.gain.value = amp;
-    o.connect(lg).connect(filt);
-    o.start(t);
-    o.stop(t + dur + 0.9);
+  if (mass < 4) {
+    leadVoice(freq(deg, 3), t, 0.5 + mass * 0.05, 0.09, {});
+    return;
+  }
+  if (mass < 12) {
+    leadVoice(freq(deg, 3), t, 0.8 + mass * 0.04, 0.1, { bright: 1.2 });
+    leadVoice(freq(deg - 4, 3), t + 0.01, 0.8 + mass * 0.04, 0.06, {});
+    return;
+  }
+  // A prize: stab the chord, low, with weight and a sparkle.
+  const tones = [song.chord, song.chord + 2, song.chord + 4];
+  tones.forEach((d, i) => leadVoice(freq(d, 2), t + i * 0.012, 1.4, 0.09, { bright: 1.3 }));
+  leadVoice(freq(song.chord, 4), t + 0.05, 0.6, 0.05, { short: true, bright: 1.4 });
+  if (dry) {
+    const sub = c.createOscillator();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(freq(song.chord, 2) * 1.4, t);
+    sub.frequency.exponentialRampToValueAtTime(freq(song.chord, 1), t + 0.25);
+    const sg = c.createGain();
+    sg.gain.setValueAtTime(0.0001, t);
+    sg.gain.exponentialRampToValueAtTime(0.28, t + 0.01);
+    sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+    sub.connect(sg).connect(dry);
+    sub.start(t);
+    sub.stop(t + 0.7);
+  }
+}
+
+/**
+ * Absorbing a rival: the lick. A fast run up the scale from the chord root with slides between
+ * notes, a turn at the top, and a long held note with vibrato. The floor drops out under it and
+ * a crash opens over it. The Freebird moment.
+ */
+export function soundLick(): void {
+  if (!ctx || !leadBus) return;
+  const c = ctx;
+  const t0 = c.currentTime;
+  const six = beat() / 4;
+  // Degrees relative to the chord root: a run up two octaves, a turn, and the held top.
+  const run = [0, 2, 4, 7, 9, 11, 14, 16, 14, 16, 18, 16, 14, 16];
+  run.forEach((rel, i) => {
+    const t = t0 + i * six * 0.5;
+    const f = freq(song.chord + rel, 2);
+    const last = i === run.length - 1;
+    const glideFrom = i > 0 && i % 3 === 0 ? 0.94 : undefined;
+    leadVoice(f, t, last ? 2.4 : six * 0.55, last ? 0.16 : 0.12, { bright: 1.25, glideFrom, vibrato: last ? 28 : 0 });
+  });
+  // Under it: the sidechain stays open, the pad lifts, and a long open hat washes over.
+  if (duck) {
+    hold(duck.gain, t0);
+    duck.gain.setTargetAtTime(1, t0, 0.02);
+    duck.gain.setValueAtTime(1, t0 + run.length * six * 0.5 + 2.4);
+  }
+  if (drumBus) {
+    const n = noise(1.6);
+    const hp = c.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 5000;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.06, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.5);
+    n.connect(hp).connect(g).connect(drumBus);
+    if (send) {
+      const toVerb = c.createGain();
+      toVerb.gain.value = 0.7;
+      g.connect(toVerb).connect(send);
+    }
+    n.start(t0);
   }
 }
 

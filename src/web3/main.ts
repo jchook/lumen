@@ -24,7 +24,7 @@ import {
 } from "../sim3";
 import { botTurn, type Memories } from "../sim3/bots";
 import { createBloom } from "./bloom";
-import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFade, soundFlare, soundInit, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundThreat } from "./sound";
+import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFade, soundFlare, soundInit, soundLick, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundThreat } from "./sound";
 
 // ---------- config + persistence ----------
 
@@ -428,7 +428,8 @@ function onEvents(ev: Ev[]): void {
       if (e.eater === me.id) eaten.set(e.food, (eaten.get(e.food) ?? 0) + e.amount);
     } else if (e.type === "gone") {
       if (e.by === me.id) {
-        soundAbsorb(eaten.get(e.id) ?? 0.2);
+        if (e.kind === "light") soundLick();
+        else soundAbsorb(eaten.get(e.id) ?? 0.2);
         eaten.delete(e.id);
       }
       if (e.kind === "light") {
