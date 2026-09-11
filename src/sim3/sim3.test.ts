@@ -237,13 +237,25 @@ describe("setup", () => {
 });
 
 describe("bots", () => {
-  test("flee from a heavier neighbour", () => {
+  test("flee from a heavier light by steering away", () => {
     const s = empty();
     const bot = add(s, "light", 500, 500, 5, { name: "Umbra", ai: true });
     add(s, "light", 560, 500, 20, { name: "You", vx: -50 });
-    const it = decide(s, bot.id, cfg)!;
-    expect(it).not.toBeNull();
-    expect(it.dx).toBeLessThan(0);
+    expect(decide(s, bot.id, cfg)).toBeNull();
+    expect(bot.goal).not.toBeNull();
+    expect(bot.goal!.follow).toBe(0);
+    expect(bot.goal!.x).toBeLessThan(500);
+  });
+  test("a graze with a well becomes an orbit above it", () => {
+    const s = empty();
+    const g = add(s, "orb", 1200, 1200, 150);
+    // Falling straight at it.
+    const bot = add(s, "light", 1200, 900, 5, { name: "Umbra", ai: true, vy: 60 });
+    expect(decide(s, bot.id, cfg)).toBeNull();
+    expect(bot.goal?.follow).toBe(g.id);
+    expect(bot.goal?.orbit).toBeGreaterThan(radiusOf(150, cfg) + 100);
+    run(s, 25);
+    expect(bot.alive).toBe(true);
   });
   test("chase a worthwhile orb by handing it to the autopilot", () => {
     const s = empty();
@@ -264,11 +276,12 @@ describe("bots", () => {
     let burns = 0;
     const frames = 600;
     for (let i = 0; i < frames; i++) {
-      step(s, cfg, 1 / 60);
-      burns += botTurn(s, cfg, 1 / 60).length;
+      botTurn(s, cfg, 1 / 60);
+      for (const e of step(s, cfg, 1 / 60)) if (e.type === "burn") burns++;
     }
+    // Bots act through the autopilot now; something should have burned, but not every frame.
     expect(burns).toBeGreaterThan(0);
-    expect(burns).toBeLessThan((frames / 60 / 0.35) * (cfg.players - 1));
+    expect(burns).toBeLessThan((frames / 60 / cfg.burnCooldown) * (cfg.players - 1));
   });
 });
 

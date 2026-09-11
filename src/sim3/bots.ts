@@ -92,6 +92,16 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
   }
   if (worst) {
     const { dx, dy, body: o } = worst;
+    mem.delete(id);
+    if (o.mass >= cfg.gravityMass && o.kind !== "light") {
+      // A well: the safe move is to circularise around it above the graze. The autopilot keeps
+      // correcting every tick, so this works on the burn grid where a single burn would be lost.
+      const R = radiusOf(o.mass, cfg) + myR;
+      const r = Math.max(R + 140, Math.hypot(dx, dy));
+      if (!(b.goal && b.goal.orbit && b.goal.follow === o.id)) setGoal(s, id, { x: o.x, y: o.y, follow: o.id, orbit: r });
+      return null;
+    }
+    // A heavier light: run. A point goal well away, on the side we're already moving.
     const len = Math.hypot(dx, dy) || 1;
     const rvx = b.vx - o.vx;
     const rvy = b.vy - o.vy;
@@ -101,9 +111,10 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
     const oy = -dy / len;
     const tx = -oy * side;
     const ty = ox * side;
-    setGoal(s, id, null);
-    mem.delete(id);
-    return { dx: ox * 0.5 + tx * 0.85, dy: oy * 0.5 + ty * 0.85, strength: 1 };
+    const ex = ox * 0.5 + tx * 0.85;
+    const ey = oy * 0.5 + ty * 0.85;
+    setGoal(s, id, { x: b.x + ex * 520, y: b.y + ey * 520, follow: 0 });
+    return null;
   }
 
   // Chase: rehearse a trip to each lighter body in range with the shared autopilot and keep the

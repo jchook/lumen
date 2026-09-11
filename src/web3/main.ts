@@ -24,7 +24,7 @@ import {
 } from "../sim3";
 import { botTurn, type Memories } from "../sim3/bots";
 import { createBloom } from "./bloom";
-import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFlare, soundInit, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundThreat } from "./sound";
+import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFade, soundFlare, soundInit, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundThreat } from "./sound";
 
 // ---------- config + persistence ----------
 
@@ -455,6 +455,7 @@ function onEvents(ev: Ev[]): void {
       endSub.innerHTML = `${me.mass.toFixed(1)} lumens on seed ${seed} · <a href="${location.href}">this sky's link</a> · tap for a new one`;
       endEl.classList.add("on");
       soundBell();
+      soundFade(6, 25);
     } else if (e.type === "burn") {
       const b = state.bodies.find((x) => x.id === e.id);
       if (b === me) soundBurn(Math.min(1, e.mass / (me.mass * cfg.burnFraction + 1e-6)));
@@ -477,6 +478,7 @@ function onEvents(ev: Ev[]): void {
       endEl.classList.add("on");
     } else if (e.type === "win") {
       soundBell();
+      soundFade(6, 25);
       endTitle.textContent = "LAST LIGHT";
       endSub.textContent = `${human(state).mass.toFixed(1)} lumens · ${state.time.toFixed(0)}s · tap for a new sky`;
       endEl.classList.add("on");

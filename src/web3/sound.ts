@@ -14,6 +14,7 @@
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 let masterTone: BiquadFilterNode | null = null;
+let songGain: GainNode | null = null;
 let stopped = false;
 let dry: GainNode | null = null;
 let send: GainNode | null = null;
@@ -195,7 +196,9 @@ export function soundInit(): void {
     masterTone.type = "lowpass";
     masterTone.frequency.value = 20000;
     masterTone.Q.value = 0.5;
-    comp.connect(masterTone).connect(master).connect(c.destination);
+    songGain = c.createGain();
+    songGain.gain.value = 1;
+    comp.connect(songGain).connect(masterTone).connect(master).connect(c.destination);
     dry = c.createGain();
     dry.connect(comp);
     duck = c.createGain();
@@ -647,7 +650,7 @@ function playPulse(f: number, t: number, level: number, strong: boolean): void {
 
 /** 0..1: how close the nearest thing that can eat me is. Turns the arrangement, not a noise. */
 export function soundThreat(level: number): void {
-  if (!ctx || !padFilter) return;
+  if (!ctx || !padFilter || stopped) return;
   const t = ctx.currentTime;
   const k = Math.min(1, Math.max(0, level));
   threat = k;
@@ -872,6 +875,15 @@ export function soundBell(): void {
   setTimeout(() => bell(4, 4, 4.0, 0.11, CHURCH), 380);
 }
 
+/** Fade the whole song to silence, starting `after` seconds from now, over `seconds`. */
+export function soundFade(after: number, seconds: number): void {
+  if (!ctx || !songGain) return;
+  const t = ctx.currentTime + after;
+  hold(songGain.gain, ctx.currentTime);
+  songGain.gain.setValueAtTime(1, t);
+  songGain.gain.linearRampToValueAtTime(0.0001, t + seconds);
+}
+
 /** Every long-lived oscillator, so the tape can slow them together. */
 function tapeVoices(): OscillatorNode[] {
   const out: OscillatorNode[] = padVoices.map((v) => v.o);
@@ -924,6 +936,8 @@ export function soundLost(): void {
     hold(o.detune, t);
     o.detune.linearRampToValueAtTime(o.detune.value - 3000, t + slow);
   }
+  // And then, eventually, silence: nobody wants a menu loop.
+  soundFade(10, 15);
   if (leadDelay) {
     hold(leadDelay.delayTime, t);
     leadDelay.delayTime.linearRampToValueAtTime(Math.min(1.9, beat() * 0.75 * 2.5), t + slow);
@@ -1002,6 +1016,10 @@ export function soundReset(seed: number): string {
   stopped = false;
   if (ctx && padFilter) {
     const t = ctx.currentTime;
+    if (songGain) {
+      hold(songGain.gain, t);
+      songGain.gain.setTargetAtTime(1, t, 0.3);
+    }
     for (const o of tapeVoices()) {
       hold(o.detune, t);
       o.detune.setTargetAtTime(0, t, 0.05);
