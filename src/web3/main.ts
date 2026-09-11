@@ -1,4 +1,5 @@
 import {
+  mulberry32,
   burn,
   burnDeltaV,
   defaultConfig,
@@ -22,9 +23,9 @@ import {
   type Plan,
   type State,
 } from "../sim3";
-import { botTurn, type Memories } from "../sim3/bots";
+import { botTurn, type Bark, type Memories } from "../sim3/bots";
 import { createBloom } from "./bloom";
-import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFade, soundFlare, soundInit, soundLick, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundResume, soundState, soundThreat } from "./sound";
+import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFade, soundFlare, soundInit, soundLick, soundLost, soundMute, soundMuted, soundPrize, soundArc, soundReset, soundResume, soundSection, soundState, soundThreat } from "./sound";
 
 // ---------- config + persistence ----------
 
@@ -53,8 +54,33 @@ try {
   const v = raw === null ? NaN : Number(raw);
   if (Number.isFinite(v) && v >= 0 && v < LEVELS.length) level = v;
 } catch {}
+/** Personal best per rival count, in lumens at the end of a round. */
+const BEST_KEY = (rivals: number) => `lumen3.best.${rivals}`;
+let best = 0;
+function loadBest(): void {
+  try {
+    best = Number(localStorage.getItem(BEST_KEY(cfg.players - 1)) ?? 0) || 0;
+  } catch {
+    best = 0;
+  }
+}
+/** Record a finished round; true when it beat the old best. */
+function recordBest(mass: number): boolean {
+  if (mass <= best) return false;
+  best = mass;
+  try {
+    localStorage.setItem(BEST_KEY(cfg.players - 1), String(Math.round(mass * 10) / 10));
+  } catch {}
+  return true;
+}
+/** Today's sky: the same seed for everyone, so scores compare. */
+const dailySeed = (): number => {
+  const d = new Date();
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+};
 const applyLevel = () => {
   cfg.players = LEVELS[level]! + 1;
+  loadBest();
 };
 applyLevel();
 
@@ -71,6 +97,8 @@ const hintEl = $("hint");
 const endEl = $("end");
 const endTitle = $("endtitle");
 const endSub = $("endsub");
+const endBest = $("endbest");
+const barkEl = $("bark");
 const panel = $("panel");
 const logEl = $("log");
 const showPath = $("showpath") as HTMLInputElement;
@@ -190,13 +218,71 @@ interface Puff {
   hue: string;
 }
 let puffs: Puff[] = [];
+/** Where everything was last frame, so a body that has just gone can still be drawn being taken. */
+const seen = new Map<number, { x: number; y: number; r: number; hue: string; prize: boolean; mass: number }>();
+/** A body being pulled into its eater over a quarter second. */
+interface Swallow {
+  x: number;
+  y: number;
+  r: number;
+  hue: string;
+  to: number;
+  age: number;
+}
+let swallows: Swallow[] = [];
+/** A ring that spreads from an eater as the meal lands. */
+let rings: Array<{ id: number; age: number; hue: string }> = [];
+let warnedBell = false;
+
+// ---------- commentary ----------
+
+const barkAt = new Map<string, number>();
+let lastBark = -1e9;
+let barkTimer = 0;
+/**
+ * One line of commentary in the speaker's colour. `key` throttles repeats of the same story for
+ * `every` seconds; everything is throttled to one line every few seconds so it never nags.
+ */
+function bark(text: string, hue: string, key: string, every: number, urgent = false): void {
+  const now = performance.now() / 1000;
+  if (now - lastBark < (urgent ? 1.2 : 3)) return;
+  if (now - (barkAt.get(key) ?? -1e9) < every) return;
+  barkAt.set(key, now);
+  lastBark = now;
+  barkEl.textContent = text;
+  barkEl.style.color = `hsl(${hue})`;
+  barkEl.classList.add("on");
+  clearTimeout(barkTimer);
+  barkTimer = window.setTimeout(() => barkEl.classList.remove("on"), 2800);
+}
+function onBarks(barks: Bark[]): void {
+  const me = human(state);
+  for (const k of barks) {
+    const who = state.bodies.find((b) => b.id === k.id);
+    if (!who) continue;
+    if (k.type === "hunt") {
+      if (k.target === me.id) bark(`${who.name} is hunting you`, identity(who), `hunt:${who.id}`, 25, true);
+      else {
+        const t = state.bodies.find((b) => b.id === k.target);
+        if (t) bark(`${who.name} is after ${t.name}`, identity(who), `hunt:${who.id}`, 25);
+      }
+    } else if (k.from === me.id) bark(`${who.name} is running from you`, identity(who), `flee:${who.id}`, 25);
+  }
+}
 
 function reset(newSeed: number): void {
   seed = newSeed;
   state = newGame(seed, cfg);
   mem = new Map();
   shown.clear();
+  seen.clear();
   puffs = [];
+  swallows = [];
+  rings = [];
+  warnedBell = false;
+  barkAt.clear();
+  barkEl.classList.remove("on");
+  cam.kick = 0;
   cam.x = human(state).x;
   cam.y = human(state).y;
   endEl.classList.remove("on");
@@ -209,7 +295,7 @@ function reset(newSeed: number): void {
 
 // ---------- camera ----------
 
-const cam = { x: 0, y: 0, view: 900 };
+const cam = { x: 0, y: 0, view: 900, kick: 0, sx: 0, sy: 0 };
 cam.x = human(state).x;
 cam.y = human(state).y;
 const zoom = () => Math.min(W, H) / cam.view;
@@ -217,7 +303,7 @@ const zoom = () => Math.min(W, H) / cam.view;
 function toScreen(x: number, y: number): [number, number] {
   const [dx, dy] = delta(cam.x, cam.y, x, y, cfg);
   const z = zoom();
-  return [W / 2 + dx * z, H / 2 + dy * z];
+  return [W / 2 + dx * z + cam.sx, H / 2 + dy * z + cam.sy];
 }
 
 /** How close my free-fall path comes to anything heavier in the next few seconds. */
@@ -265,6 +351,11 @@ function updateCamera(dt: number): void {
   // Snap out fast, ease back in slowly.
   const rate = want > cam.view ? 4 : 0.8;
   cam.view += (want - cam.view) * (1 - Math.exp(-dt * rate));
+  // A kick from a big moment: a short shake that dies in a third of a second.
+  cam.kick *= Math.exp(-dt * 9);
+  const amp = cam.kick * 7;
+  cam.sx = (Math.random() - 0.5) * 2 * amp;
+  cam.sy = (Math.random() - 0.5) * 2 * amp;
 }
 
 // ---------- input ----------
@@ -389,6 +480,7 @@ window.addEventListener("keydown", (e) => {
     say("drift");
   }
   if (e.key === "r" || e.key === "R") reset(seed + 1);
+  if (e.key === "d" || e.key === "D") reset(dailySeed());
   if (e.key === "t" || e.key === "T") panel.classList.toggle("hidden");
   if (e.key === "]" && level < LEVELS.length - 1) {
     level++;
@@ -453,6 +545,16 @@ function hueOf(b: Body, me: Body): string {
 /** Mass I've taken from each body so far, so a meal sounds once, when it's finished. */
 const eaten = new Map<number, number>();
 
+/** The end screen: a title, a line, the best for this company, and the way to today's sky. */
+function showEnd(title: string, subHtml: string, mass: number): void {
+  const isNew = recordBest(mass);
+  endTitle.textContent = title;
+  endSub.innerHTML = `${subHtml} · <a href="#s=${dailySeed()}&r=${cfg.players - 1}">today's sky</a>`;
+  endBest.textContent = !best ? "" : isNew ? `new best · ${best.toFixed(1)} with ${cfg.players - 1} rivals` : `best · ${best.toFixed(1)} with ${cfg.players - 1} rivals`;
+  endBest.classList.toggle("new", isNew);
+  endEl.classList.add("on");
+}
+
 function onEvents(ev: Ev[]): void {
   const me = human(state);
   for (const e of ev) {
@@ -464,13 +566,39 @@ function onEvents(ev: Ev[]): void {
         else soundAbsorb(eaten.get(e.id) ?? 0.2);
         eaten.delete(e.id);
       }
+      const by = state.bodies.find((x) => x.id === e.by);
+      const was = seen.get(e.id);
+      if (e.by && was) {
+        // The meal is pulled in, the eater flashes and rings, and a bigger meal throws sparks.
+        swallows.push({ x: was.x, y: was.y, r: was.r, hue: was.hue, to: e.by, age: 0 });
+        if (by) {
+          const sp = spring(by);
+          sp.flash = 1;
+          const big = e.kind === "light" || was.mass >= 4;
+          if (big) {
+            sp.v += 30;
+            rings.push({ id: by.id, age: 0, hue: e.kind === "light" ? was.hue : identity(by) });
+            const n = e.kind === "light" ? 16 : 8;
+            for (let i = 0; i < n; i++) {
+              const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+              const v = 90 + Math.random() * 140;
+              puffs.push({ x: was.x, y: was.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, age: 0, hue: was.hue });
+            }
+          }
+          if (by === me && e.kind === "light") cam.kick = 1;
+        }
+      }
       if (e.kind === "light") {
-        const by = state.bodies.find((x) => x.id === e.by);
         const who = by?.name || `a ${by?.mass.toFixed(0)}-lumen body`;
         say(`${e.name} absorbed by ${who}`);
-      }
+        if (by === me) bark(`you took ${e.name}`, identity(me), "took", 0, true);
+        else if (by?.kind === "light") bark(`${by.name} took ${e.name}`, identity(by), "took", 0, true);
+        else if (by && by.mass >= cfg.gravityMass && was) bark(`${e.name} fell into a giant`, was.hue, "fell", 0, true);
+        else if (by && was) bark(`${e.name} was absorbed`, was.hue, "fell", 0, true);
+      } else if (was?.prize && by && by.kind === "light" && by !== me) bark(`${by.name} took the prize`, identity(by), "prize", 0);
     } else if (e.type === "prize") {
       say(`a ${e.mass.toFixed(0)}-lumen prize is falling`);
+      bark(`a ${e.mass.toFixed(0)}-lumen prize is warping in`, GB.yellow, "prize", 0);
       soundPrize();
     } else if (e.type === "flare") {
       const g = state.bodies.find((x) => x.id === e.id);
@@ -484,9 +612,7 @@ function onEvents(ev: Ev[]): void {
     } else if (e.type === "bell") {
       const w = state.bodies.find((x) => x.id === e.winner);
       const mine = w === me;
-      endTitle.textContent = mine ? "THE BELL · YOURS" : `THE BELL · ${w?.name.toUpperCase() ?? "NOBODY"}`;
-      endSub.innerHTML = `${me.mass.toFixed(1)} lumens on seed ${seed} · <a href="${location.href}">this sky's link</a> · tap for a new one`;
-      endEl.classList.add("on");
+      showEnd(mine ? "THE BELL · YOURS" : `THE BELL · ${w?.name.toUpperCase() ?? "NOBODY"}`, `${me.mass.toFixed(1)} lumens on seed ${seed} · <a href="${location.href}">this sky's link</a> · tap for a new one`, me.alive ? me.mass : 0);
       soundBell();
       soundFade(6, 25);
     } else if (e.type === "burn") {
@@ -505,41 +631,151 @@ function onEvents(ev: Ev[]): void {
     } else if (e.type === "over") {
       if (state.time < cfg.roundSeconds || !cfg.roundSeconds) soundLost();
       if (me.alive) continue; // the bell already spoke
-      endTitle.textContent = "ABSORBED";
+      cam.kick = 2;
       const killer = log[0]?.replace(/^You absorbed by /, "") ?? "";
-      endSub.textContent = `${killer ? `by ${killer} · ` : ""}${me.mass.toFixed(1)} lumens at the end · tap for a new sky`;
-      endEl.classList.add("on");
+      showEnd("ABSORBED", `${killer ? `by ${killer} · ` : ""}${me.mass.toFixed(1)} lumens at the end · tap for a new sky`, 0);
     } else if (e.type === "win") {
       soundBell();
       soundFade(6, 25);
-      endTitle.textContent = "LAST LIGHT";
-      endSub.textContent = `${human(state).mass.toFixed(1)} lumens · ${state.time.toFixed(0)}s · tap for a new sky`;
-      endEl.classList.add("on");
+      showEnd("LAST LIGHT", `${human(state).mass.toFixed(1)} lumens · ${state.time.toFixed(0)}s · tap for a new sky`, human(state).mass);
     }
   }
 }
 
 // ---------- draw ----------
 
-const STARS = Array.from({ length: 260 }, (_, i) => ({ x: ((i * 7919) % 2400) / 2400, y: ((i * 104729) % 2400) / 2400, s: 0.4 + ((i * 31) % 10) / 12 }));
+// ---------- sky ----------
+// Two star layers for depth: a far dusting of pinpricks and a nearer, sparser layer with a little
+// size and warmth, each drifting slower than the world. Parallax runs off the camera's unwrapped
+// travel, so a layer can use any tile size and never jumps when the camera crosses the torus seam.
+// Nothing here is bright enough to bloom, so the sky never grows a halo that could pass for food.
+interface Star {
+  x: number;
+  y: number;
+  s: number;
+  a: number;
+  /** Twinkle rate in Hz; 0 for a steady star. */
+  tw: number;
+}
+function starLayer(k: number, n: number, size: [number, number], alpha: [number, number], twinkling: number): Star[] {
+  const r = mulberry32(k);
+  return Array.from({ length: n }, () => ({
+    x: r(),
+    y: r(),
+    s: size[0] + r() * (size[1] - size[0]),
+    a: alpha[0] + r() * (alpha[1] - alpha[0]),
+    tw: r() < twinkling ? 0.4 + r() * 1.2 : 0,
+  }));
+}
+/** `tile` is in world px; the layer repeats every `tile` of parallax-scaled travel. */
+const FAR = { stars: starLayer(11, 150, [0.5, 1.0], [0.12, 0.32], 0), drift: 0.22, tile: 700, tint: "rgb(176, 186, 204)" };
+const NEAR = { stars: starLayer(23, 55, [0.9, 1.7], [0.28, 0.55], 0.3), drift: 0.45, tile: 1100, tint: "rgb(232, 226, 210)" };
+const NEBULA_TILE = 3600;
+
+/** A nebula: a few soft elliptical lobes of one dusty colour, drawn with the far stars. */
+interface Nebula {
+  x: number;
+  y: number;
+  hue: string;
+  lobes: Array<{ dx: number; dy: number; r: number; squash: number; rot: number; a: number }>;
+}
+const NEBULA_HUES = ["344 45% 58%", "192 45% 52%", "262 40% 60%", "24 65% 52%", "150 35% 50%"];
+let nebulae: Nebula[] = [];
+let nebulaSeed = NaN;
+/** Rare by design: most skies have none, some have one, a few have two. Fixed per seed. */
+function buildNebulae(forSeed: number): void {
+  nebulaSeed = forSeed;
+  const r = mulberry32((forSeed ^ 0x6eb01a) >>> 0);
+  const u = r();
+  const n = u < 0.55 ? 0 : u < 0.9 ? 1 : 2;
+  nebulae = Array.from({ length: n }, () => ({
+    x: r(),
+    y: r(),
+    hue: NEBULA_HUES[Math.floor(r() * NEBULA_HUES.length)]!,
+    lobes: Array.from({ length: 3 + Math.floor(r() * 3) }, () => ({
+      dx: (r() - 0.5) * 320,
+      dy: (r() - 0.5) * 320,
+      r: 180 + r() * 220,
+      squash: 0.45 + r() * 0.5,
+      rot: r() * Math.PI,
+      a: 0.05 + r() * 0.05,
+    })),
+  }));
+}
+
+/** Camera travel with the torus seam unwrapped, for parallax. */
+const odo = { x: 0, y: 0, px: NaN, py: NaN };
+function advanceOdometer(): void {
+  if (Number.isNaN(odo.px)) {
+    odo.px = cam.x;
+    odo.py = cam.y;
+    return;
+  }
+  const short = (d: number, size: number): number => d - Math.round(d / size) * size;
+  odo.x += short(cam.x - odo.px, cfg.width);
+  odo.y += short(cam.y - odo.py, cfg.height);
+  odo.px = cam.x;
+  odo.py = cam.y;
+}
 
 function drawBackground(): void {
   ctx.fillStyle = "#101112";
   ctx.fillRect(-2, -2, W + 4, H + 4);
-  // Parallax starfield tiled on the torus at half the camera motion.
+  if (nebulaSeed !== seed) buildNebulae(seed);
+  advanceOdometer();
   const z = zoom();
-  const tile = Math.min(cfg.width, cfg.height) * z;
-  const ox = ((-cam.x * 0.5 * z) % tile + tile) % tile;
-  const oy = ((-cam.y * 0.5 * z) % tile + tile) % tile;
-  ctx.fillStyle = "rgba(251, 241, 199, 0.5)";
-  for (let ty = -1; ty <= Math.ceil(H / tile); ty++) {
-    for (let tx = -1; tx <= Math.ceil(W / tile); tx++) {
-      for (const st of STARS) {
-        const x = ox + (tx + st.x) * tile;
-        const y = oy + (ty + st.y) * tile;
-        if (x < -2 || y < -2 || x > W + 2 || y > H + 2) continue;
-        ctx.globalAlpha = 0.18 + st.s * 0.35;
-        ctx.fillRect(x, y, st.s, st.s);
+  const t = performance.now() / 1000;
+  /** Screen offset of the tile origin for a layer at `drift`, repeating every `tile` world px. */
+  const origin = (drift: number, tile: number): [number, number] => {
+    const px = tile * z;
+    return [(((-odo.x * drift * z) % px) + px) % px, (((-odo.y * drift * z) % px) + px) % px];
+  };
+
+  // Nebulae sit with the far stars.
+  if (nebulae.length) {
+    const px = NEBULA_TILE * z;
+    const [ox, oy] = origin(FAR.drift, NEBULA_TILE);
+    for (let ty = -1; ty <= Math.ceil(H / px); ty++) {
+      for (let tx = -1; tx <= Math.ceil(W / px); tx++) {
+        for (const nb of nebulae) {
+          const cx = ox + (tx + nb.x) * px;
+          const cy = oy + (ty + nb.y) * px;
+          const reach = 600 * z;
+          if (cx < -reach || cy < -reach || cx > W + reach || cy > H + reach) continue;
+          for (const lb of nb.lobes) {
+            const rr = lb.r * z;
+            ctx.save();
+            ctx.translate(cx + lb.dx * z, cy + lb.dy * z);
+            ctx.rotate(lb.rot);
+            ctx.scale(1, lb.squash);
+            const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rr);
+            g.addColorStop(0, `hsla(${nb.hue} / ${lb.a})`);
+            g.addColorStop(0.5, `hsla(${nb.hue} / ${lb.a * 0.45})`);
+            g.addColorStop(1, `hsla(${nb.hue} / 0)`);
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(0, 0, rr, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+      }
+    }
+  }
+
+  for (const layer of [FAR, NEAR]) {
+    const px = layer.tile * z;
+    const [ox, oy] = origin(layer.drift, layer.tile);
+    ctx.fillStyle = layer.tint;
+    for (let ty = -1; ty <= Math.ceil(H / px); ty++) {
+      for (let tx = -1; tx <= Math.ceil(W / px); tx++) {
+        for (const st of layer.stars) {
+          const x = ox + (tx + st.x) * px;
+          const y = oy + (ty + st.y) * px;
+          if (x < -2 || y < -2 || x > W + 2 || y > H + 2) continue;
+          ctx.globalAlpha = st.tw ? st.a * (0.6 + 0.4 * Math.sin(t * st.tw * Math.PI * 2 + st.x * 40)) : st.a;
+          ctx.fillRect(x - st.s / 2, y - st.s / 2, st.s, st.s);
+        }
       }
     }
   }
@@ -774,8 +1010,9 @@ function drawWorld(dt: number): void {
     s.r += s.v * dt;
     s.flash *= Math.exp(-dt * 8);
     const r = Math.max(0.6, s.r) * z;
-    if (sx + r * 3 < 0 || sx - r * 3 > W || sy + r * 3 < 0 || sy - r * 3 > H) continue;
     const hue = hueOf(b, me);
+    seen.set(b.id, { x: b.x, y: b.y, r: s.r, hue, prize: b.prize, mass: b.mass });
+    if (sx + r * 3 < 0 || sx - r * 3 > W || sy + r * 3 < 0 || sy - r * 3 > H) continue;
     const isLight = b.kind === "light";
     if (b.warp > 0) {
       // Arriving: a dotted outline where it will be, and an arc that closes as it lands.
@@ -837,6 +1074,42 @@ function drawWorld(dt: number): void {
       ctx.stroke();
     }
     if (isLight) labels.push({ text: `${b.ai ? b.name + " " : ""}${b.mass.toFixed(b.mass < 10 ? 1 : 0)}`, x: sx, y: sy - r - 9, hue: identity(b) });
+  }
+
+  // Meals being drawn in: from where they were to where the eater is now, shrinking as they go.
+  swallows = swallows.filter((w) => w.age < 0.25);
+  for (const w of swallows) {
+    w.age += dt;
+    const p = Math.min(1, w.age / 0.25);
+    const ease = p * p;
+    const eater = state.bodies.find((b) => b.id === w.to);
+    let x = w.x;
+    let y = w.y;
+    if (eater) {
+      const [dx, dy] = delta(w.x, w.y, eater.x, eater.y, cfg);
+      x += dx * ease;
+      y += dy * ease;
+    }
+    const [sx, sy] = toScreen(x, y);
+    const rr = Math.max(0.6, w.r * (1 - ease)) * z;
+    ctx.fillStyle = `hsla(${w.hue} / ${0.9 * (1 - p)})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, rr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Rings spreading from an eater.
+  rings = rings.filter((g) => g.age < 0.45);
+  for (const g of rings) {
+    g.age += dt;
+    const eater = state.bodies.find((b) => b.id === g.id);
+    if (!eater) continue;
+    const [sx, sy] = toScreen(eater.x, eater.y);
+    const p = g.age / 0.45;
+    ctx.strokeStyle = `hsla(${g.hue} / ${0.8 * (1 - p)})`;
+    ctx.lineWidth = 2.5 * (1 - p) + 0.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy, spring(eater).r * z + p * 46, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   // Exhaust puffs.
@@ -1036,14 +1309,14 @@ function hud(): void {
     .filter((b) => b.kind === "light")
     .sort((a, b) => b.mass - a.mass);
   rankEl.innerHTML = ranked
-    .map((b) => `<span style="color:hsl(${identity(b)})${b.alive ? "" : ";opacity:.35;text-decoration:line-through"}"><b>${b.name}</b> ${b.mass.toFixed(1)}${b.ai && b.trait !== "rival" ? `<i>${b.trait}</i>` : ""}</span>`)
+    .map((b) => `<span style="color:hsl(${identity(b)})${b.alive ? "" : ";opacity:.35;text-decoration:line-through"}"><b>${b.name}</b> ${b.mass.toFixed(1)}</span>`)
     .join("");
   const left = cfg.roundSeconds ? Math.max(0, cfg.roundSeconds - state.time) : state.time;
   const mm = Math.floor(left / 60);
   const ss = Math.floor(left % 60);
   clockEl.textContent = `${mm}:${String(ss).padStart(2, "0")}`;
   clockEl.classList.toggle("late", cfg.roundSeconds > 0 && left < 30);
-  levelEl.textContent = `· ${cfg.players - 1} rival${cfg.players - 1 === 1 ? "" : "s"} · seed ${seed}`;
+  levelEl.textContent = `· ${cfg.players - 1} rival${cfg.players - 1 === 1 ? "" : "s"} · seed ${seed}${best ? ` · best ${best.toFixed(0)}` : ""}${seed === dailySeed() ? " · today's sky" : ""}`;
 }
 
 // ---------- loop ----------
@@ -1055,13 +1328,20 @@ function frame(now: number): void {
   while (acc >= DT) {
     if (state.status === "playing") {
       const ev: Ev[] = [];
-      for (const it of botTurn(state, cfg, DT, undefined, mem)) burn(state, it.id, it.dx, it.dy, it.strength, cfg, ev);
+      const barks: Bark[] = [];
+      for (const it of botTurn(state, cfg, DT, undefined, mem, barks)) burn(state, it.id, it.dx, it.dy, it.strength, cfg, ev);
       if (pointer.down && manual.checked) burnToward();
       step(state, cfg, DT, ev);
       onEvents(ev);
+      onBarks(barks);
+      if (cfg.roundSeconds && !warnedBell && cfg.roundSeconds - state.time <= 30) {
+        warnedBell = true;
+        bark("thirty seconds to the bell", GB.yellow, "bell", 0, true);
+      }
     }
     acc -= DT;
   }
+  soundArc(state.time, cfg.roundSeconds);
   updateCamera(elapsed);
   drawWorld(elapsed);
   const glowing = bloomBox.checked && bloom.ok;
@@ -1163,4 +1443,42 @@ say(`seed ${seed} · ${cfg.players - 1} rivals · in ${soundReset(seed)}`);
 cfg.burnGrid = soundBeat() / 4 >= cfg.burnCooldown ? soundBeat() / 4 : soundBeat() / 2;
 
 // Debug hook for headless checks.
-(window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg, audio: soundState };
+(window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg, audio: soundState, section: soundSection };
+
+// A link to a sky (the end screen's, or a shared one) changes the hash: follow it.
+window.addEventListener("hashchange", () => {
+  const u = readUrl();
+  if (u.rivals !== null) {
+    const idx = LEVELS.indexOf(u.rivals);
+    if (idx >= 0 && idx !== level) {
+      level = idx;
+      applyLevel();
+      saveLevel();
+    }
+  }
+  if (u.seed !== null && u.seed !== seed) reset(u.seed);
+});
+
+// Installable: the manifest and icon are linked here so the bundler leaves them alone, and the
+// service worker (network first, cache fallback) only runs on the real site, never against HMR.
+for (const [rel, href] of [
+  ["manifest", "manifest.webmanifest"],
+  ["apple-touch-icon", "apple-touch-icon.png"],
+]) {
+  const l = document.createElement("link");
+  l.rel = rel!;
+  l.href = href!;
+  document.head.appendChild(l);
+}
+for (const [name, content] of [
+  ["apple-mobile-web-app-capable", "yes"],
+  ["mobile-web-app-capable", "yes"],
+  ["apple-mobile-web-app-status-bar-style", "black-translucent"],
+  ["theme-color", "#101112"],
+]) {
+  const m = document.createElement("meta");
+  m.name = name!;
+  m.content = content!;
+  document.head.appendChild(m);
+}
+if ("serviceWorker" in navigator && location.protocol === "https:" && location.hostname !== "localhost") navigator.serviceWorker.register("sw.js").catch(() => {});

@@ -63,6 +63,9 @@ export function createBloom(source: HTMLCanvasElement, target: HTMLCanvasElement
     return dead;
   }
   gl.useProgram(prog);
+  // Canvas rows run top-down, GL textures bottom-up; without this the whole glow layer renders
+  // upside down and every bright body gets a blurry ghost at its mirrored height.
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);

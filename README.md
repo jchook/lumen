@@ -171,8 +171,22 @@ highways; getting into one is a maneuver you plan and pay for.
 toward the nearest giant on a sub-orbital path, gone in a while. Every 40 s each giant flares a ring
 of six small orbs outward and loses that mass, so giants slowly shrink over a round.
 
-**Rivals.** Each has a temperament, shown beside its name: a hunter takes close fights, a grazer
-never hunts lights, a coward keeps its distance. Nobody hunts lights in the first 25 s.
+**Rivals.** Each has a hidden temperament: a hunter stalks lights from far off with a thin margin
+from ten seconds in, a grazer never hunts lights, a coward keeps its distance. Everyone else waits
+25 s and wants a clear edge. A line of commentary above the hint says what they are up to ("Umbra
+is hunting you", "Nyx took Sable", "a 9-lumen prize is warping in"), one line every few seconds at
+most.
+
+**The round has a shape.** The song follows the clock: the first eight bars are pad, bass and
+hats; the kit drops in; a minute before the bell the kick and clap fall away and the pad opens; the
+kick comes back with doubled hats; the last thirty seconds ride a riser into the bell, with the clap
+rolling through the final two bars. Meals are pulled into their eater, the eater rings and throws
+sparks on a big one, and the camera kicks when you take a rival.
+
+**Coming back.** The end screen shows your best for that many rivals, and links today's sky, a seed
+from the date that everyone shares (D also jumps to it). The site is installable: a manifest,
+icons, and a network-first service worker so it opens full screen from a phone home screen and
+still runs offline.
 
 **Sound and glow.** Web Audio, no assets: a tone on absorb that drops with the mass, a thump on
 burn, a hum that swells near anything that can eat you, a chime for a prize, a bell for the round.
@@ -188,7 +202,8 @@ was 6x.
 **Bots.** `src/sim3/bots.ts`: escape a predicted graze with a heavier body by burning prograde,
 otherwise rehearse a trip to each lighter body in range with the same autopilot the player uses and
 chase the best one whose mass beats the price, committing until it is eaten or has cost more than it
-is worth. Rivals are only hunted with a clear mass margin.
+is worth. Rivals are only hunted with a mass margin; hunters keep after one even when no route lands
+within their horizon, as long as it is clear.
 
 ```sh
 bun run arena            # bot-only balance sweep

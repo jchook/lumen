@@ -398,6 +398,52 @@ let clockStart = 0;
 let threat = 0; // 0..1, from soundThreat
 let ducked = 0; // same thing, as the pad sees it
 
+/**
+ * The round has a shape and the arrangement follows it. Sections switch on bar lines:
+ *   intro    the first eight bars: pad, bass and hats, no kick, no clap
+ *   groove   the full kit
+ *   break    a minute before the bell: kick and clap drop, the pad opens, the bass thins
+ *   build    kick returns, hats double up
+ *   finale   the last thirty seconds: full kit, a riser sweeping up under everything
+ * `arc.t` is game time and `arc.total` the round length (0 = no bell, so groove for ever).
+ */
+type Section = "intro" | "groove" | "break" | "build" | "finale";
+const arc = { t: 0, total: 0, section: "intro" as Section, riser: false };
+function wantedSection(t: number): Section {
+  if (eighthIndex < 64) return "intro";
+  if (!arc.total) return "groove";
+  const left = arc.total - t;
+  if (left <= 30) return "finale";
+  if (left <= 44) return "build";
+  if (left <= 60) return "break";
+  return "groove";
+}
+/** Where the round is, from the game each frame. */
+export function soundArc(t: number, total: number): void {
+  arc.t = t;
+  arc.total = total;
+}
+export const soundSection = (): Section => arc.section;
+
+/** The finale's riser: filtered noise climbing for thirty seconds, swelling into the bell. */
+function riser(t: number, seconds: number): void {
+  if (!ctx || !drumBus) return;
+  const c = ctx;
+  const n = noise(seconds + 0.5);
+  const bp = c.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = 1.2;
+  bp.frequency.setValueAtTime(300, t);
+  bp.frequency.exponentialRampToValueAtTime(7000, t + seconds);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.012, t + 2);
+  g.gain.exponentialRampToValueAtTime(0.07, t + seconds);
+  g.gain.setTargetAtTime(0.0001, t + seconds, 0.08);
+  n.connect(bp).connect(g).connect(drumBus);
+  n.start(t);
+}
+
 /** Seconds per beat of the current song. */
 export const soundBeat = (): number => beat();
 /** Which sixteenth of the bar we're on right now, 0..15. */
@@ -428,6 +474,21 @@ function schedule(): void {
     // Swing: off-beat eighths land late. That's the pocket.
     const t = nextEighth + (inBar % 2 === 1 ? eighth * song.swing : 0);
     const r = hash((song.seed * 31 + i * 17) >>> 0);
+    // Game time at this eighth, and the section it falls in. Sections only change on a bar line.
+    const gt = arc.t + (t - ctx.currentTime);
+    if (inBar === 0) {
+      const want = wantedSection(gt);
+      if (want !== arc.section) {
+        arc.section = want;
+        if (want === "break" && padFilter) padFilter.frequency.setTargetAtTime(2600, t, 1.5);
+        if (want === "finale" && !arc.riser) {
+          arc.riser = true;
+          riser(t, Math.max(4, arc.total - gt));
+        }
+      }
+    }
+    const sec = arc.section;
+    const kicks = sec === "groove" || sec === "build" || sec === "finale";
     // Harmonic rhythm: a new chord every two bars.
     if (i > 0 && i % 16 === 0) {
       const options = NEXT[song.chord] ?? CHORDS;
@@ -438,7 +499,8 @@ function schedule(): void {
     // Bass: the style's pattern, wandering by step, fond of chord tones, home on the chord change.
     const style = BASS[song.bass];
     const step = style.pattern[inBar]!;
-    if (step.v > 0) {
+    // In the break the bass keeps only its real hits; the ghosts and slides go with the kick.
+    if (step.v > 0 && !(sec === "break" && step.v < 0.5)) {
       // Ghosts and octave hits don't move the line; real hits wander, fond of chord tones.
       if (step.v >= 0.5 && !step.o) {
         const roll = r();
@@ -457,24 +519,37 @@ function schedule(): void {
     // The drum bed: four on the floor keys both sidechains; clap on two and four; hats on the swung
     // off-beats, open on the last; a shaker on the sixteenths in between, quiet.
     if (inBar % 2 === 0) {
-      kick(t, inBar === 0 ? 1 : 0.85);
-      if (duck) {
-        duck.gain.cancelScheduledValues(t);
-        duck.gain.setValueAtTime(0.45, t);
-        duck.gain.linearRampToValueAtTime(1.0, t + beat() * 0.55);
+      if (kicks) {
+        kick(t, inBar === 0 || sec === "finale" ? 1 : 0.85);
+        if (duck) {
+          duck.gain.cancelScheduledValues(t);
+          duck.gain.setValueAtTime(0.45, t);
+          duck.gain.linearRampToValueAtTime(1.0, t + beat() * 0.55);
+        }
+        if (bassDuck) {
+          bassDuck.gain.cancelScheduledValues(t);
+          bassDuck.gain.setValueAtTime(0.62, t);
+          bassDuck.gain.linearRampToValueAtTime(1.0, t + beat() * 0.4);
+        }
+        if ((inBar === 2 || inBar === 6) && sec !== "build") clap(t);
       }
-      if (bassDuck) {
-        bassDuck.gain.cancelScheduledValues(t);
-        bassDuck.gain.setValueAtTime(0.62, t);
-        bassDuck.gain.linearRampToValueAtTime(1.0, t + beat() * 0.4);
-      }
-      if (inBar === 2 || inBar === 6) clap(t);
-    } else hat(t, inBar === 7 ? 0.8 : 0.5, inBar === 7);
-    shaker(t + eighth * 0.5 + (inBar % 2 === 0 ? eighth * song.swing * 0.5 : 0), 0.5);
-    // The disco filter: a sweep across four bars on the pad and the bass tone.
+      // The break: an open hat washes each beat instead of the kick.
+      if (sec === "break") hat(t, 0.45, true);
+    } else hat(t, inBar === 7 ? 0.8 : 0.5, inBar === 7 && sec !== "intro");
+    // Build and finale: hats on every eighth, and in the finale on the sixteenths too.
+    if (sec === "build" || sec === "finale") {
+      if (inBar % 2 === 0) hat(t, 0.4, false);
+      if (sec === "finale") hat(t + eighth * 0.5, 0.3, false);
+    }
+    // The last two bars before the bell: the clap rolls in on every eighth, louder each one.
+    if (sec === "finale" && arc.total - gt < beat() * 8 && arc.total - gt > 0) clap(t, 0.5 + 0.5 * (1 - (arc.total - gt) / (beat() * 8)));
+    shaker(t + eighth * 0.5 + (inBar % 2 === 0 ? eighth * song.swing * 0.5 : 0), sec === "intro" ? 0.35 : 0.5);
+    // The disco filter: a sweep across four bars on the pad and the bass tone. Open in the break,
+    // and opening further through the finale.
     const phase = (i % 32) / 32;
     const sweep = 0.5 - 0.5 * Math.cos(phase * Math.PI * 2);
-    if (padFilter) padFilter.frequency.setTargetAtTime((700 + 900 * sweep) * (1 - ducked * 0.6), t, 0.12);
+    const lift = sec === "break" ? 1400 : sec === "finale" ? 600 * (1 - Math.max(0, arc.total - gt) / 30) : 0;
+    if (padFilter) padFilter.frequency.setTargetAtTime((700 + 900 * sweep + lift) * (1 - ducked * 0.6), t, 0.12);
     if (bassTone) bassTone.frequency.setTargetAtTime(700 + 1100 * sweep, t, 0.12);
     // Threat: a low pulse on the root every eighth, harder as it gets closer.
     if (threat > 0.12) playPulse(freq(0, 2), t, threat, inBar % 2 === 0);
@@ -628,7 +703,7 @@ function hat(t: number, level: number, open: boolean): void {
 }
 
 /** A clap on two and four: three quick bursts, band-limited, into the room. */
-function clap(t: number): void {
+function clap(t: number, level = 1): void {
   if (!ctx || !drumBus || !send) return;
   const c = ctx;
   for (let k = 0; k < 3; k++) {
@@ -640,7 +715,7 @@ function clap(t: number): void {
     bp.Q.value = 0.9;
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, at);
-    g.gain.exponentialRampToValueAtTime(k === 2 ? 0.07 : 0.045, at + 0.002);
+    g.gain.exponentialRampToValueAtTime((k === 2 ? 0.07 : 0.045) * level, at + 0.002);
     g.gain.exponentialRampToValueAtTime(0.0001, at + (k === 2 ? 0.16 : 0.03));
     n.connect(bp).connect(g);
     g.connect(drumBus);
@@ -1169,6 +1244,9 @@ export function soundLost(): void {
 export function soundReset(seed: number): string {
   const name = soundKey(seed);
   stopped = false;
+  arc.t = 0;
+  arc.section = "intro";
+  arc.riser = false;
   if (ctx && padFilter) {
     const t = ctx.currentTime;
     if (songGain) {

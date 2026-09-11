@@ -287,7 +287,51 @@ export function orbitalSpeed(M: number, d: number, cfg: Config): number {
   return Math.sqrt((cfg.G * M * d * d) / Math.pow(d * d + cfg.soft * cfg.soft, 1.5));
 }
 
-const NAMES = ["Umbra", "Nyx", "Sable", "Vesper", "Morrow", "Ash", "Dusk", "Rune"];
+// Bot names: the original twilight set, then stars, then people who looked up, then a few who
+// wandered in from the pub. Kept short so they fit under a small light.
+const TWILIGHT = ["Umbra", "Nyx", "Sable", "Vesper", "Morrow", "Ash", "Dusk", "Rune"];
+const STARS = [
+  "Vega", "Altair", "Deneb", "Rigel", "Sirius", "Spica", "Antares", "Pollux", "Castor", "Mira",
+  "Algol", "Alcor", "Mizar", "Nunki", "Sadr", "Wezen", "Adhara", "Saiph", "Mintaka", "Alnilam",
+  "Capella", "Procyon", "Regulus", "Arcturus", "Hadar", "Atria", "Avior", "Naos", "Merak", "Dubhe",
+  "Alioth", "Megrez", "Phecda", "Alkaid", "Thuban", "Kochab", "Polaris", "Caph", "Schedar", "Mirach",
+  "Almach", "Hamal", "Elnath", "Alcyone", "Maia", "Electra", "Merope", "Atlas", "Menkar", "Canopus",
+  "Acrux", "Mimosa", "Gacrux", "Shaula", "Lesath", "Sargas", "Alhena", "Wasat", "Alphard", "Gienah",
+  "Zosma", "Algieba", "Izar", "Alphecca", "Sarin", "Eltanin", "Sheliak", "Albireo", "Tarazed", "Enif",
+  "Markab", "Scheat", "Algenib", "Ankaa", "Alnair", "Mirfak", "Arneb", "Nihal", "Furud", "Suhail",
+  "Sabik", "Rukbat", "Dabih", "Nashira", "Algedi", "Errai", "Navi", "Talitha", "Chara", "Keid",
+  "Acamar", "Meissa", "Heka", "Tabit", "Dschubba", "Fang", "Jabbah", "Toliman", "Proxima", "Wolf",
+  "Luyten", "Kapteyn", "Gliese", "Achird", "Cursa", "Zaurak", "Alkes", "Kraz", "Porrima", "Syrma",
+];
+const THINKERS = [
+  "Kepler", "Newton", "Galileo", "Hubble", "Halley", "Cassini", "Huygens", "Brahe", "Tycho", "Sagan",
+  "Hawking", "Planck", "Bohr", "Curie", "Fermi", "Dirac", "Feynman", "Euler", "Gauss", "Noether",
+  "Hilbert", "Riemann", "Cantor", "Godel", "Turing", "Erdos", "Laplace", "Fourier", "Pascal", "Fermat",
+  "Leibniz", "Euclid", "Thales", "Hypatia", "Ptolemy", "Lovelace", "Babbage", "Boole", "Bayes", "Cauchy",
+  "Abel", "Galois", "Ramsey", "Nash", "Conway", "Knuth", "Tao", "Hardy", "Lorenz", "Hopper",
+  "Leavitt", "Rubin", "Burnell", "Cannon", "Chandra", "Zwicky", "Oort", "Kuiper", "Bessel", "Hertz",
+  "Doppler", "Kelvin", "Faraday", "Maxwell", "Tesla", "Ohm", "Volta", "Ampere", "Joule", "Mach",
+  "Bose", "Pauli", "Born", "Einstein", "Lorentz", "Weyl", "Wigner", "Penrose", "Thorne", "Dyson",
+  "Yukawa", "Emmy", "Ada", "Vera", "Maryam", "Sophie", "Isaac", "Carl",
+];
+const REGULARS = [
+  "Bob", "Grugg", "Steve", "Dave", "Kevin", "Gary", "Doug", "Bort", "Gorp", "Zug",
+  "Glorp", "Thog", "Ugg", "Nigel", "Todd", "Fred", "Ted", "Phil", "Meep", "Zorp",
+  "Blip", "Nubbin", "Herb", "Earl", "Gus", "Bud", "Moe", "Larry", "Greg", "Brenda",
+  "Linda", "Deb", "Pam", "Doris", "Marge", "Ethel", "Agnes", "Mabel", "Gertie", "Wendell",
+];
+const NAMES = [...TWILIGHT, ...STARS, ...THINKERS, ...REGULARS];
+
+/** `n` distinct names for a seed. Uses its own generator so the board for a seed is unchanged. */
+export function pickNames(seed: number, n: number): string[] {
+  const r = mulberry32((seed ^ 0x5eed5eed) >>> 0);
+  const pool = NAMES.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [pool[i], pool[j]] = [pool[j]!, pool[i]!];
+  }
+  return pool.slice(0, n);
+}
 const TRAITS: Trait[] = ["hunter", "coward", "grazer", "rival"];
 
 // ---------- setup ----------
@@ -381,12 +425,13 @@ function generate(seed: number, cfg: Config): State {
     return [bx, by];
   };
   // Lights: the human first, each in a comfortable orbit around a different giant.
+  const names = pickNames(seed, cfg.players - 1);
   for (let i = 0; i < cfg.players; i++) {
     const g = giants[i % giants.length]!;
     const d = radiusOf(g.mass, cfg) + 240 + rng() * 80;
     const a = rng() * Math.PI * 2;
     drifting("light", cfg.startMass, wrap(g.x + Math.cos(a) * d, cfg.width), wrap(g.y + Math.sin(a) * d, cfg.height), {
-      name: i === 0 ? "You" : NAMES[(i - 1) % NAMES.length]!,
+      name: i === 0 ? "You" : names[i - 1]!,
       ai: i !== 0,
       trait: i === 0 ? "rival" : TRAITS[(i - 1) % TRAITS.length]!,
     });

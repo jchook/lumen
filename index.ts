@@ -8,6 +8,12 @@ const server = Bun.serve({
     "/": v3,
     "/v2": v2,
     "/v1": v1,
+    // The PWA files sit beside the bundle; the bundler doesn't know about them.
+    "/manifest.webmanifest": () => new Response(Bun.file("src/web3/manifest.webmanifest"), { headers: { "content-type": "application/manifest+json" } }),
+    "/sw.js": () => new Response(Bun.file("src/web3/sw.js"), { headers: { "content-type": "text/javascript" } }),
+    "/icon-192.png": () => new Response(Bun.file("src/web3/icon-192.png")),
+    "/icon-512.png": () => new Response(Bun.file("src/web3/icon-512.png")),
+    "/apple-touch-icon.png": () => new Response(Bun.file("src/web3/apple-touch-icon.png")),
   },
   development: {
     hmr: true,

@@ -80,6 +80,27 @@ body {
   opacity: 0;
 }
 
+/* Commentary: one line, in the speaker's colour, just above the hint. */
+#bark {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 18%;
+  text-align: center;
+  font-size: 14px;
+  letter-spacing: 0.25em;
+  color: var(--ink);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.5s;
+  text-shadow: 0 0 12px rgba(0, 0, 0, 0.8);
+}
+
+#bark.on {
+  opacity: 1;
+  transition: opacity 0.15s;
+}
+
 #tools {
   position: fixed;
   top: 12px;

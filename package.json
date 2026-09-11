@@ -13,7 +13,7 @@
     "dev": "bun --hot index.ts",
     "start": "bun index.ts",
     "test": "bun test",
-    "build": "bun build src/web3/index.html --outdir dist --minify && bun build src/web2/index.html --outdir dist/v2 --minify && bun build src/web/index.html --outdir dist/v1 --minify",
+    "build": "bun build src/web3/index.html --outdir dist --minify && cp src/web3/manifest.webmanifest src/web3/sw.js src/web3/icon-192.png src/web3/icon-512.png src/web3/apple-touch-icon.png dist/ && bun build src/web2/index.html --outdir dist/v2 --minify && bun build src/web/index.html --outdir dist/v1 --minify",
     "typecheck": "tsc --noEmit",
     "bots": "bun scripts/bots.ts",
     "grade": "bun scripts/grade.ts",

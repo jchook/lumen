@@ -28,16 +28,20 @@ export interface BotStyle {
   huntsLights: boolean;
   /** No hunting lights before this many seconds: everyone gets an opening. */
   huntAfter: number;
+  /** How much a rival is worth relative to food of the same mass. A hunter lives for it. */
+  appetite: number;
+  /** Keep after a rival even when no rehearsed route lands inside the horizon. */
+  stalks: boolean;
 }
 
-export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 5, margin: 1.4, huntsLights: true, huntAfter: 25 };
+export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 5, margin: 1.4, huntsLights: true, huntAfter: 25, appetite: 1, stalks: false };
 
 /** Temperaments. A hunter takes close fights; a grazer never hunts lights; a coward keeps its distance. */
 export const STYLES: Record<Trait, BotStyle> = {
   rival: defaultStyle,
-  hunter: { ...defaultStyle, sense: 640, fear: 110, greed: 1.4, margin: 1.3, huntAfter: 15 },
+  hunter: { ...defaultStyle, sense: 900, fear: 110, greed: 1.4, horizon: 8, margin: 1.12, huntAfter: 10, appetite: 2.2, stalks: true },
   grazer: { ...defaultStyle, greed: 1.6, fear: 170, huntsLights: false },
-  coward: { ...defaultStyle, fear: 260, greed: 2.0, margin: 2.5 },
+  coward: { ...defaultStyle, fear: 260, greed: 2.0, margin: 2.5, appetite: 0.6 },
 };
 export const styleOf = (b: Body): BotStyle => STYLES[b.trait] ?? defaultStyle;
 
@@ -47,6 +51,9 @@ export interface Memory {
   spent: number;
 }
 export type Memories = Map<number, Memory>;
+
+/** What a bot just decided, for the commentary: it started hunting `target`, or running from `from`. */
+export type Bark = { type: "hunt"; id: number; target: number } | { type: "flee"; id: number; from: number };
 
 /** Mass spent on `n` full burns from `mass` (agility included). */
 export function burnCost(mass: number, n: number, cfg: Config): number {
@@ -59,7 +66,7 @@ export function burnCost(mass: number, n: number, cfg: Config): number {
  * Decide for one light. Escapes come back as a direct burn; chases are handed to the autopilot via
  * setGoal and return null.
  */
-export function decide(s: State, id: number, cfg: Config, style: BotStyle = defaultStyle, mem: Memories = new Map()): Intent | null {
+export function decide(s: State, id: number, cfg: Config, style: BotStyle = defaultStyle, mem: Memories = new Map(), barks?: Bark[]): Intent | null {
   const b = byId(s, id);
   if (!b || !b.alive || b.cooldown > 0) return null;
   const myR = radiusOf(b.mass, cfg);
@@ -114,6 +121,7 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
     const ex = ox * 0.5 + tx * 0.85;
     const ey = oy * 0.5 + ty * 0.85;
     setGoal(s, id, { x: b.x + ex * 520, y: b.y + ey * 520, follow: 0 });
+    if (o.kind === "light") barks?.push({ type: "flee", id, from: o.id });
     return null;
   }
 
@@ -137,8 +145,10 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
     const [dx0, dy0] = delta(b.x, b.y, o.x, o.y, cfg);
     if (Math.hypot(dx0, dy0) > style.sense) continue;
     const p = plan(s, b, { x: o.x, y: o.y, follow: o.id }, cfg, style.horizon, 0.2);
-    if (!p.arrives || p.blocked) continue;
-    const gain = o.mass - p.cost * style.greed;
+    if (p.blocked) continue;
+    // A stalker keeps after a rival it can't yet catch, as long as the route is clear.
+    if (!p.arrives && !(style.stalks && o.kind === "light")) continue;
+    const gain = o.mass * (o.kind === "light" ? style.appetite : 1) - p.cost * style.greed;
     if (gain <= 0) continue;
     if (!best || gain > best.gain) best = { gain, id: o.id };
   }
@@ -146,13 +156,14 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
     mem.delete(id);
     return null;
   }
+  if (m?.target !== best.id && byId(s, best.id)?.kind === "light") barks?.push({ type: "hunt", id, target: best.id });
   mem.set(id, { target: best.id, spent: 0 });
   setGoal(s, id, { x: 0, y: 0, follow: best.id });
   return null;
 }
 
 /** Bots think on their own clocks so a hundred lights don't all burn on the same frame. */
-export function botTurn(s: State, cfg: Config, dt: number, style: BotStyle = defaultStyle, mem: Memories = new Map()): Array<{ id: number } & Intent> {
+export function botTurn(s: State, cfg: Config, dt: number, style: BotStyle = defaultStyle, mem: Memories = new Map(), barks?: Bark[]): Array<{ id: number } & Intent> {
   const out: Array<{ id: number } & Intent> = [];
   for (const b of s.bodies) {
     if (b.kind !== "light" || !b.ai || !b.alive) continue;
@@ -161,7 +172,7 @@ export function botTurn(s: State, cfg: Config, dt: number, style: BotStyle = def
     const before = Math.floor((s.time - dt - phase) / mine.think);
     const after = Math.floor((s.time - phase) / mine.think);
     if (after === before) continue;
-    const it = decide(s, b.id, cfg, mine, mem);
+    const it = decide(s, b.id, cfg, mine, mem, barks);
     if (it) out.push({ id: b.id, ...it });
   }
   return out;
