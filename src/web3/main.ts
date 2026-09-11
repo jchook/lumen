@@ -173,7 +173,7 @@ function reset(newSeed: number): void {
   endEl.classList.remove("on");
   eaten.clear();
   const key = soundReset(seed);
-  cfg.burnGrid = soundBeat() / 4;
+  cfg.burnGrid = soundBeat() / 4 >= cfg.burnCooldown ? soundBeat() / 4 : soundBeat() / 2;
   writeUrl();
   say(`seed ${seed} · ${cfg.players - 1} rivals · in ${key}`);
 }
@@ -1092,7 +1092,7 @@ $("reset").addEventListener("click", () => {
 });
 writeUrl();
 say(`seed ${seed} · ${cfg.players - 1} rivals · in ${soundReset(seed)}`);
-cfg.burnGrid = soundBeat() / 4;
+cfg.burnGrid = soundBeat() / 4 >= cfg.burnCooldown ? soundBeat() / 4 : soundBeat() / 2;
 
 // Debug hook for headless checks.
 (window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg };

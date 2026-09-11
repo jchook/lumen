@@ -43,19 +43,39 @@ const song = {
 };
 
 /**
- * Bass styles. `pattern` is what plays on each eighth of a four-beat bar:
- *   0 rest · 0.4 ghost · 1 hit · 2 accent · 3 hit an octave up (the disco bounce).
- *   deep:   long, round, on the beat, with ghosts.
- *   funk:   tresillo with ghost notes, plucky, a little chorus, a thumb.
- *   bounce: root and octave alternating on every eighth, tight and driven: Lights, Voyager.
+ * Bass styles. A pattern is one bar of eighths; each step says what happens on it:
+ *   v    velocity 0..1 (0 = rest, ~0.35 = ghost)
+ *   len  how many eighths the note holds (0.5 = staccato, 2 = held)
+ *   s    slide: legato into this note (glide, no retrigger) — the 303 move
+ *   o    an octave up (the disco bounce)
+ *   deep:   on the beat, long holds, a slide into beat three, ghosts.
+ *   funk:   tresillo with ghosts and staccato, a thumb on accents, a slide before the turnaround.
+ *   bounce: root and octave on every eighth, tight, one held root at the top of the bar.
  * The voice is one mono synth: envelopes retrigger, notes glide, nothing is ever cut.
  */
 type BassStyle = "deep" | "funk" | "bounce";
 const BASS_STYLES: BassStyle[] = ["deep", "funk", "bounce"];
-const BASS: Record<BassStyle, { pattern: number[]; cutoff: number; q: number; env: number; bright: number; ring: number; thumb: number; dip: number; drive: number; sub: number; chorus: number; gain: number; glide: number }> = {
-  deep: { pattern: [2, 0, 0.4, 0, 1, 0, 0.4, 0], cutoff: 240, q: 0.9, env: 500, bright: 0.35, ring: 1.2, thumb: 0, dip: 0.015, drive: 1.5, sub: 0.7, chorus: 0, gain: 0.15, glide: 0.03 },
-  funk: { pattern: [2, 0, 0.4, 1, 0, 0.4, 1, 0.4], cutoff: 230, q: 3.2, env: 1500, bright: 0.18, ring: 0.8, thumb: 0.9, dip: 0.05, drive: 2.2, sub: 0.45, chorus: 6, gain: 0.14, glide: 0.012 },
-  bounce: { pattern: [1, 3, 1, 3, 1, 3, 2, 3], cutoff: 230, q: 2.0, env: 1000, bright: 0.11, ring: 0.4, thumb: 0.25, dip: 0.03, drive: 2.6, sub: 0.5, chorus: 4, gain: 0.12, glide: 0.006 },
+interface Step {
+  v: number;
+  len: number;
+  s?: boolean;
+  o?: boolean;
+}
+const R: Step = { v: 0, len: 0 };
+const st = (v: number, len: number, extra: Partial<Step> = {}): Step => ({ v, len, ...extra });
+const BASS: Record<BassStyle, { pattern: Step[]; cutoff: number; q: number; env: number; bright: number; ring: number; thumb: number; dip: number; drive: number; sub: number; chorus: number; gain: number; glide: number; attack: number }> = {
+  deep: {
+    pattern: [st(1, 2), R, st(0.35, 0.5), st(0.6, 1, { s: true }), st(0.85, 2), R, st(0.35, 0.5), st(0.5, 0.5)],
+    cutoff: 260, q: 0.9, env: 420, bright: 0.35, ring: 1.2, thumb: 0, dip: 0.012, drive: 1.5, sub: 0.7, chorus: 0, gain: 0.15, glide: 0.03, attack: 0.012,
+  },
+  funk: {
+    pattern: [st(1, 0.5), R, st(0.35, 0.5), st(0.8, 1), R, st(0.35, 0.5), st(0.8, 0.5), st(0.6, 1, { s: true })],
+    cutoff: 240, q: 3.0, env: 1400, bright: 0.18, ring: 0.8, thumb: 0.9, dip: 0.05, drive: 2.2, sub: 0.45, chorus: 6, gain: 0.14, glide: 0.012, attack: 0.006,
+  },
+  bounce: {
+    pattern: [st(0.8, 1), st(0.7, 0.5, { o: true }), st(0.8, 0.5), st(0.7, 0.5, { o: true }), st(0.8, 0.5), st(0.7, 0.5, { o: true }), st(1, 0.5), st(0.7, 0.5, { o: true })],
+    cutoff: 240, q: 2.0, env: 900, bright: 0.11, ring: 0.45, thumb: 0.25, dip: 0.03, drive: 2.6, sub: 0.5, chorus: 4, gain: 0.12, glide: 0.006, attack: 0.005,
+  },
 };
 
 function applyBassStyle(): void {
@@ -91,7 +111,7 @@ export function soundKey(seed: number): string {
   const names = Object.keys(MODES);
   song.modeName = names[Math.floor(r() * names.length)]!;
   song.mode = MODES[song.modeName]!;
-  song.bpm = 56 + Math.floor(r() * 30);
+  song.bpm = 90 + Math.floor(r() * 33);
   song.bass = BASS_STYLES[Math.floor(r() * BASS_STYLES.length)]!;
   song.swing = 0.07 + r() * 0.1;
   song.chord = 0;
@@ -148,6 +168,8 @@ let duck: GainNode | null = null;
 let drumBus: GainNode | null = null;
 let bassBus: GainNode | null = null;
 let bassDrive: WaveShaperNode | null = null;
+let bassDuck: GainNode | null = null;
+let bassTone: BiquadFilterNode | null = null;
 /** The bass is one monophonic synth. */
 let mono: { oscs: OscillatorNode[]; vcf: BiquadFilterNode; vca: GainNode; bright: GainNode; brightOscs: OscillatorNode[] } | null = null;
 let tension: { o: OscillatorNode; g: GainNode } | null = null;
@@ -211,7 +233,7 @@ export function soundInit(): void {
     const lfo = c.createOscillator();
     lfo.frequency.value = 0.06;
     const lfoG = c.createGain();
-    lfoG.gain.value = 260;
+    lfoG.gain.value = 90;
     lfo.connect(lfoG).connect(padFilter.frequency);
     lfo.start();
     // Wow and flutter, applied to every pad voice's detune.
@@ -233,13 +255,15 @@ export function soundInit(): void {
     vca.gain.value = 0.0001;
     bassDrive = c.createWaveShaper();
     bassDrive.oversample = "2x";
-    const bassTone = c.createBiquadFilter();
+    bassTone = c.createBiquadFilter();
     bassTone.type = "lowpass";
-    bassTone.frequency.value = 1800;
-    bassTone.Q.value = 0.5;
+    bassTone.frequency.value = 1400;
+    bassTone.Q.value = 0.6;
+    bassDuck = c.createGain();
+    bassDuck.gain.value = 1;
     bassBus = c.createGain();
     bassBus.gain.value = 1;
-    vca.connect(bassDrive).connect(bassTone).connect(bassBus).connect(comp);
+    vca.connect(bassDrive).connect(bassTone).connect(bassDuck).connect(bassBus).connect(comp);
     const vcf = c.createBiquadFilter();
     vcf.type = "lowpass";
     const bright = c.createGain();
@@ -263,6 +287,13 @@ export function soundInit(): void {
       vca,
       bright,
     };
+    // The second saw drifts against the first, so the tone moves inside a note.
+    const drift = c.createOscillator();
+    drift.frequency.value = 0.31;
+    const driftG = c.createGain();
+    driftG.gain.value = 5;
+    drift.connect(driftG).connect(mono.brightOscs[1]!.detune);
+    drift.start();
     applyBassStyle();
     // Tension: a tone a step above the chord root, silent until something can eat you.
     const to = c.createOscillator();
@@ -354,11 +385,11 @@ function schedule(): void {
       if (tension) tension.o.frequency.setTargetAtTime(freq(song.chord + 1, 4), t, 0.1);
     }
     // Bass: the style's pattern, wandering by step, fond of chord tones, home on the chord change.
-    const st = BASS[song.bass];
-    const hit = st.pattern[inBar]!;
-    if (hit) {
+    const style = BASS[song.bass];
+    const step = style.pattern[inBar]!;
+    if (step.v > 0) {
       // Ghosts and octave hits don't move the line; real hits wander, fond of chord tones.
-      if (hit >= 1 && hit !== 3) {
+      if (step.v >= 0.5 && !step.o) {
         const roll = r();
         if (roll < 0.5) bass.degree += r() < 0.5 ? 1 : -1;
         else if (roll < 0.85) {
@@ -369,11 +400,11 @@ function schedule(): void {
         if (bass.degree > -2) bass.degree -= 7;
         if (i % 16 === 0) bass.degree = song.chord - 7;
       }
-      const deg = hit === 3 ? bass.degree + 7 : bass.degree;
-      const accent = hit === 2 ? 1 : hit === 3 ? 0.75 : hit < 1 ? 0.35 : 0.8;
-      playBass(freq(deg, 4), t, accent);
+      const deg = step.o ? bass.degree + 7 : bass.degree;
+      playBass(freq(deg, 4), t, step.v, step.len * eighth, !!step.s);
     }
-    // Four on the floor, quiet, and it keys the sidechain. Hats on the swung off-beats.
+    // The drum bed: four on the floor keys both sidechains; clap on two and four; hats on the swung
+    // off-beats, open on the last; a shaker on the sixteenths in between, quiet.
     if (inBar % 2 === 0) {
       kick(t, inBar === 0 ? 1 : 0.85);
       if (duck) {
@@ -381,7 +412,19 @@ function schedule(): void {
         duck.gain.setValueAtTime(0.45, t);
         duck.gain.linearRampToValueAtTime(1.0, t + beat() * 0.55);
       }
-    } else hat(t, inBar === 7 ? 0.7 : 0.5);
+      if (bassDuck) {
+        bassDuck.gain.cancelScheduledValues(t);
+        bassDuck.gain.setValueAtTime(0.62, t);
+        bassDuck.gain.linearRampToValueAtTime(1.0, t + beat() * 0.4);
+      }
+      if (inBar === 2 || inBar === 6) clap(t);
+    } else hat(t, inBar === 7 ? 0.8 : 0.5, inBar === 7);
+    shaker(t + eighth * 0.5 + (inBar % 2 === 0 ? eighth * song.swing * 0.5 : 0), 0.5);
+    // The disco filter: a sweep across four bars on the pad and the bass tone.
+    const phase = (i % 32) / 32;
+    const sweep = 0.5 - 0.5 * Math.cos(phase * Math.PI * 2);
+    if (padFilter) padFilter.frequency.setTargetAtTime((700 + 900 * sweep) * (1 - ducked * 0.6), t, 0.12);
+    if (bassTone) bassTone.frequency.setTargetAtTime(700 + 1100 * sweep, t, 0.12);
     // Threat: a low pulse on the root every eighth, harder as it gets closer.
     if (threat > 0.12) playPulse(freq(0, 2), t, threat, inBar % 2 === 0);
     nextEighth += eighth;
@@ -432,10 +475,15 @@ function hold(p: AudioParam, t: number): void {
   }
 }
 
-/** One note on the mono bass: glide to the pitch, retrigger filter and amp envelopes. */
-function playBass(f: number, t: number, accent: number): void {
+/**
+ * One note on the mono bass. `slide` glides in without retriggering the amp (legato); otherwise
+ * the envelopes retrigger from wherever they are. `len` is when the release starts. The bright
+ * pluck and the thumb only come on accents, so the kick keeps the transients and the bass keeps
+ * the tone.
+ */
+function playBass(f: number, t: number, v: number, len: number, slide: boolean): void {
   if (!ctx || !mono) return;
-  const st = BASS[song.bass];
+  const style = BASS[song.bass];
   const fund = f / 2;
   const pitches: Array<[OscillatorNode, number]> = [
     [mono.oscs[0]!, fund],
@@ -443,27 +491,32 @@ function playBass(f: number, t: number, accent: number): void {
     [mono.brightOscs[0]!, fund],
     [mono.brightOscs[1]!, fund],
   ];
+  const glide = slide ? 0.07 : style.glide;
   for (const [o, fr] of pitches) {
     hold(o.frequency, t);
-    o.frequency.setTargetAtTime(fr * (1 + st.dip), t, st.glide);
-    o.frequency.setTargetAtTime(fr, t + 0.03, 0.02);
+    if (slide) o.frequency.setTargetAtTime(fr, t, glide);
+    else {
+      o.frequency.setTargetAtTime(fr * (1 + style.dip), t, glide);
+      o.frequency.setTargetAtTime(fr, t + 0.03, 0.02);
+    }
   }
-  // Filter: snaps open on the hit, closes over `bright`.
+  const accent = v >= 0.95;
+  // Filter: opens on the hit (a lot on accents), closes over `bright`.
   hold(mono.vcf.frequency, t);
-  mono.vcf.frequency.setTargetAtTime(st.cutoff + st.env * accent, t, 0.002);
-  mono.vcf.frequency.setTargetAtTime(st.cutoff, t + 0.01, st.bright * 0.4);
-  // Bright layer amp: dies on the same clock as the filter.
+  mono.vcf.frequency.setTargetAtTime(style.cutoff + style.env * (accent ? 1 : 0.45) * v, t, slide ? 0.03 : 0.002);
+  mono.vcf.frequency.setTargetAtTime(style.cutoff, t + 0.01, style.bright * 0.4);
+  // Bright layer: only really on accents; a whisper otherwise.
   hold(mono.bright.gain, t);
-  mono.bright.gain.setTargetAtTime(0.9, t, 0.003);
-  mono.bright.gain.setTargetAtTime(0.0001, t + 0.012, st.bright * 0.45);
-  // Body amp: peaks fast, rings out on its own clock.
-  const peak = st.gain * accent;
+  mono.bright.gain.setTargetAtTime(accent ? 0.9 : 0.25 * v, t, 0.003);
+  mono.bright.gain.setTargetAtTime(0.0001, t + 0.012, style.bright * 0.45);
+  // Body: soft attack, holds for `len`, then rings down on its own clock.
+  const peak = style.gain * (0.5 + 0.5 * v);
   hold(mono.vca.gain, t);
-  mono.vca.gain.setTargetAtTime(peak, t, 0.004);
-  mono.vca.gain.setTargetAtTime(0.0001, t + 0.02, st.ring * 0.33);
-  // Sub and chorus levels per style.
-  // Thumb: a short knock of band-limited noise at the onset.
-  if (st.thumb && bassBus) {
+  if (!slide) mono.vca.gain.setTargetAtTime(peak, t, style.attack);
+  else mono.vca.gain.setTargetAtTime(peak, t, 0.03);
+  mono.vca.gain.setTargetAtTime(0.0001, t + Math.max(0.03, len), style.ring * 0.25);
+  // Thumb on accents only.
+  if (style.thumb && accent && bassBus) {
     const c = ctx;
     const n = noise(0.04);
     const bp = c.createBiquadFilter();
@@ -472,7 +525,7 @@ function playBass(f: number, t: number, accent: number): void {
     bp.Q.value = 1.4;
     const tg = c.createGain();
     tg.gain.setValueAtTime(0.0001, t);
-    tg.gain.exponentialRampToValueAtTime(0.1 * st.thumb * accent, t + 0.003);
+    tg.gain.exponentialRampToValueAtTime(0.1 * style.thumb, t + 0.003);
     tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
     n.connect(bp).connect(tg).connect(bassBus);
     n.start(t);
@@ -507,19 +560,62 @@ function kick(t: number, level: number): void {
   n.start(t);
 }
 
-/** A closed hat on the swung off-beats: filtered noise, very short. */
-function hat(t: number, level: number): void {
+/** Hats on the swung off-beats: closed and short, or open and let ring. */
+function hat(t: number, level: number, open: boolean): void {
   if (!ctx || !drumBus) return;
   const c = ctx;
-  const n = noise(0.06);
+  const n = noise(open ? 0.35 : 0.06);
   const hp = c.createBiquadFilter();
   hp.type = "highpass";
-  hp.frequency.value = 7000;
+  hp.frequency.value = open ? 6000 : 7000;
   const g = c.createGain();
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(0.035 * level, t + 0.002);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + (open ? 0.28 : 0.05));
   n.connect(hp).connect(g).connect(drumBus);
+  n.start(t);
+}
+
+/** A clap on two and four: three quick bursts, band-limited, into the room. */
+function clap(t: number): void {
+  if (!ctx || !drumBus || !send) return;
+  const c = ctx;
+  for (let k = 0; k < 3; k++) {
+    const at = t + k * 0.011;
+    const n = noise(0.2);
+    const bp = c.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 1300;
+    bp.Q.value = 0.9;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(k === 2 ? 0.07 : 0.045, at + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + (k === 2 ? 0.16 : 0.03));
+    n.connect(bp).connect(g);
+    g.connect(drumBus);
+    if (k === 2) {
+      const toVerb = c.createGain();
+      toVerb.gain.value = 0.6;
+      g.connect(toVerb).connect(send);
+    }
+    n.start(at);
+  }
+}
+
+/** A shaker between the eighths, quiet, for the sixteenth pulse. */
+function shaker(t: number, level: number): void {
+  if (!ctx || !drumBus) return;
+  const c = ctx;
+  const n = noise(0.04);
+  const bp = c.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = 9000;
+  bp.Q.value = 1.5;
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.014 * level, t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.035);
+  n.connect(bp).connect(g).connect(drumBus);
   n.start(t);
 }
 
@@ -551,7 +647,6 @@ export function soundThreat(level: number): void {
   threat = k;
   ducked = k;
   // The pad darkens and thins; the tension tone creeps in a step above the root.
-  padFilter.frequency.setTargetAtTime(1100 - k * 750, t, 0.5);
   for (const v of padVoices) v.g.gain.setTargetAtTime(0.028 * (1 - k * 0.5), t, 0.5);
   if (tension) tension.g.gain.setTargetAtTime(k * k * 0.06, t, 0.4);
 }
