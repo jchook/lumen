@@ -1003,19 +1003,14 @@ function tapeVoices(): OscillatorNode[] {
  * key blooms out into the room and hangs there.
  */
 export function soundLost(): void {
-  if (!ctx || !dry || !send || !masterTone) return;
+  if (!ctx || !dry || !send || !masterTone || !padFilter) return;
   const c = ctx;
   const t = c.currentTime;
   stopped = true;
   const slow = 1.5;
-  // Make sure the tape has something to grab: whatever was sounding, plus the chord struck now,
-  // full and fast, and a root bass note. Otherwise a death between notes is a silent second.
-  const wasSounding = tapeVoices();
-  for (const v of padVoices) {
-    hold(v.g.gain, t);
-    v.g.gain.setTargetAtTime(0.03, t, 0.02);
-  }
-  playChord(t, 0.03);
+  // 1. Undo the threat's ducking and darkening, right now, so the strike is heard in full.
+  threat = 0;
+  ducked = 0;
   if (duck) {
     hold(duck.gain, t);
     duck.gain.setTargetAtTime(1, t, 0.02);
@@ -1024,7 +1019,25 @@ export function soundLost(): void {
     hold(bassDuck.gain, t);
     bassDuck.gain.setTargetAtTime(1, t, 0.02);
   }
-  playBass(freq(song.chord - 7, 4), t, 1, slow, false);
+  hold(padFilter.frequency, t);
+  padFilter.frequency.setTargetAtTime(1500, t, 0.02);
+  if (tension) tension.g.gain.setTargetAtTime(0.0001, t, 0.2);
+  // 2. Strike: whatever pad was sounding stays, the chord is struck again fast and full, and a
+  //    root bass note lands. Nothing below touches these params again before they've sounded.
+  const wasSounding = tapeVoices();
+  for (const v of padVoices) {
+    hold(v.g.gain, t);
+    v.g.gain.setTargetAtTime(0.03, t, 0.02);
+  }
+  playChord(t, 0.03);
+  for (const v of padVoices) {
+    v.g.gain.cancelScheduledValues(t + 0.001);
+    v.g.gain.setTargetAtTime(0.045, t, 0.03);
+    v.g.gain.setTargetAtTime(0.0001, t + slow * 0.8, 0.4);
+  }
+  playBass(freq(song.chord - 7, 4), t, 1, slow * 0.9, false);
+  if (mono) mono.vca.gain.setTargetAtTime(0.0001, t + slow * 0.9, 0.3);
+  // The grab: a knock as the tape catches.
   const grab = noise(0.12);
   const grabBp = c.createBiquadFilter();
   grabBp.type = "bandpass";
@@ -1032,31 +1045,24 @@ export function soundLost(): void {
   grabBp.Q.value = 0.7;
   const grabG = c.createGain();
   grabG.gain.setValueAtTime(0.0001, t);
-  grabG.gain.exponentialRampToValueAtTime(0.09, t + 0.004);
-  grabG.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+  grabG.gain.exponentialRampToValueAtTime(0.14, t + 0.004);
+  grabG.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
   grab.connect(grabBp).connect(grabG).connect(dry);
   grab.start(t);
+  // 3. The tape slows: every voice, old and new, slides down together; the mix darkens.
   const voices = new Set<OscillatorNode>([...wasSounding, ...tapeVoices()]);
   for (const o of voices) {
     hold(o.detune, t);
     o.detune.linearRampToValueAtTime(o.detune.value - 3000, t + slow);
   }
-  // And then, eventually, silence: nobody wants a menu loop.
-  soundFade(10, 15);
   if (leadDelay) {
     hold(leadDelay.delayTime, t);
     leadDelay.delayTime.linearRampToValueAtTime(Math.min(1.9, beat() * 0.75 * 2.5), t + slow);
   }
   hold(masterTone.frequency, t);
-  masterTone.frequency.exponentialRampToValueAtTime(180, t + slow);
-  // Let the mix go quiet under the boom, then the chord has the room to itself.
-  if (mono) {
-    hold(mono.vca.gain, t);
-    mono.vca.gain.setTargetAtTime(0.0001, t + slow * 0.6, 0.3);
-  }
-  for (const v of padVoices) v.g.gain.setTargetAtTime(0.0001, t + slow * 0.7, 0.4);
-  if (tension) tension.g.gain.setTargetAtTime(0.0001, t, 0.2);
-  // The boom: a sub that starts at the root and sinks, with a little saturation.
+  masterTone.frequency.setValueAtTime(20000, t);
+  masterTone.frequency.exponentialRampToValueAtTime(220, t + slow);
+  // 4. The boom: a sub that starts at the root and sinks, with a little saturation.
   const boomAt = t + slow;
   const o = c.createOscillator();
   o.type = "sine";
@@ -1079,7 +1085,7 @@ export function soundLost(): void {
   g.connect(boomVerb).connect(send);
   o.start(boomAt);
   o.stop(boomAt + 3);
-  // The chord: the mode's i chord with its sixth, voiced low and slow, blooming after the boom.
+  // 5. The chord: the mode's i chord with its sixth, voiced low and slow, blooming after the boom.
   masterTone.frequency.setTargetAtTime(20000, boomAt + 0.3, 0.8);
   const dryBus = dry;
   const sendBus = send;
@@ -1113,6 +1119,8 @@ export function soundLost(): void {
     v.start(at);
     v.stop(at + 10.5);
   });
+  // 6. And then, eventually, silence: nobody wants a menu loop.
+  soundFade(10, 15);
 }
 
 /** A new sky: new key, the clock restarts, the pad opens back up. */

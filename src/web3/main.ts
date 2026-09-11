@@ -1072,6 +1072,21 @@ const SLIDERS: SliderDef[] = [
   { key: "approach", min: 0.2, max: 3, stepSize: 0.1 },
 ];
 const slidersEl = $("sliders");
+// A slider for my own lumens, for testing: dragging it sets my mass directly.
+const meSlider = $("meslider") as HTMLInputElement;
+const meVal = $("meval");
+meSlider.addEventListener("input", () => {
+  const me = human(state);
+  if (me.alive) me.mass = Number(meSlider.value);
+  meVal.textContent = meSlider.value;
+});
+setInterval(() => {
+  if (document.activeElement !== meSlider) {
+    const me = human(state);
+    meSlider.value = String(Math.round(me.mass));
+    meVal.textContent = me.mass.toFixed(1);
+  }
+}, 250);
 function buildSliders(): void {
   slidersEl.innerHTML = "";
   for (const def of SLIDERS) {
