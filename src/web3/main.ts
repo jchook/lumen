@@ -233,6 +233,8 @@ let swallows: Swallow[] = [];
 /** A ring that spreads from an eater as the meal lands. */
 let rings: Array<{ id: number; age: number; hue: string }> = [];
 let warnedBell = false;
+/** The most lumens I held this round, for the ending: an absorbed light always ends at zero. */
+let peak = 0;
 
 // ---------- commentary ----------
 
@@ -280,6 +282,7 @@ function reset(newSeed: number): void {
   swallows = [];
   rings = [];
   warnedBell = false;
+  peak = 0;
   barkAt.clear();
   barkEl.classList.remove("on");
   cam.kick = 0;
@@ -633,7 +636,9 @@ function onEvents(ev: Ev[]): void {
       if (me.alive) continue; // the bell already spoke
       cam.kick = 2;
       const killer = log[0]?.replace(/^You absorbed by /, "") ?? "";
-      showEnd("ABSORBED", `${killer ? `by ${killer} · ` : ""}${me.mass.toFixed(1)} lumens at the end · tap for a new sky`, 0);
+      const mm = Math.floor(state.time / 60);
+      const ss = String(Math.floor(state.time % 60)).padStart(2, "0");
+      showEnd("ABSORBED", `${killer ? `by ${killer} · ` : ""}peaked at ${peak.toFixed(1)} lumens · lasted ${mm}:${ss} · tap for a new sky`, 0);
     } else if (e.type === "win") {
       soundBell();
       soundFade(6, 25);
@@ -668,8 +673,8 @@ function starLayer(k: number, n: number, size: [number, number], alpha: [number,
   }));
 }
 /** `tile` is in world px; the layer repeats every `tile` of parallax-scaled travel. */
-const FAR = { stars: starLayer(11, 150, [0.5, 1.0], [0.12, 0.32], 0), drift: 0.22, tile: 700, tint: "rgb(176, 186, 204)" };
-const NEAR = { stars: starLayer(23, 55, [0.9, 1.7], [0.28, 0.55], 0.3), drift: 0.45, tile: 1100, tint: "rgb(232, 226, 210)" };
+const FAR = { stars: starLayer(11, 170, [0.6, 1.1], [0.16, 0.42], 0), drift: 0.22, tile: 700, tint: "rgb(176, 186, 204)" };
+const NEAR = { stars: starLayer(23, 60, [1.0, 1.9], [0.38, 0.68], 0.3), drift: 0.45, tile: 1100, tint: "rgb(232, 226, 210)" };
 const NEBULA_TILE = 3600;
 
 /** A nebula: a few soft elliptical lobes of one dusty colour, drawn with the far stars. */
@@ -1040,8 +1045,9 @@ function drawWorld(dt: number): void {
       continue;
     }
     const heavier = b.mass > me.mass && me.alive && b !== me;
-    // Halo says threat or food; the core is white for lights, tinted for orbs.
-    glow(sx, sy, r, hue, isLight ? 0.9 + s.flash * 0.3 : 0.75, isLight ? 2.8 : b.mass >= cfg.gravityMass ? 1.9 : 2);
+    // Halo says threat or food. The halo and the core are the same fraction of the radius for every
+    // body, so what you see is the mass: a light's identity comes from its colour, not a bigger glow.
+    glow(sx, sy, r, hue, isLight ? 0.9 + s.flash * 0.3 : 0.8, 2.2);
     if (isLight) {
       ctx.fillStyle = `hsla(${identity(b)} / 0.95)`;
       ctx.beginPath();
@@ -1054,7 +1060,7 @@ function drawWorld(dt: number): void {
     } else {
       ctx.fillStyle = b.mass >= cfg.gravityMass ? "hsla(43 59% 88% / 0.92)" : `hsla(${hue} / 0.9)`;
       ctx.beginPath();
-      ctx.arc(sx, sy, Math.max(0.8, r * (b.mass >= cfg.gravityMass ? 0.82 : 0.5)), 0, Math.PI * 2);
+      ctx.arc(sx, sy, Math.max(0.8, r * 0.62), 0, Math.PI * 2);
       ctx.fill();
     }
     if (b.prize) {
@@ -1332,6 +1338,7 @@ function frame(now: number): void {
       for (const it of botTurn(state, cfg, DT, undefined, mem, barks)) burn(state, it.id, it.dx, it.dy, it.strength, cfg, ev);
       if (pointer.down && manual.checked) burnToward();
       step(state, cfg, DT, ev);
+      peak = Math.max(peak, human(state).mass);
       onEvents(ev);
       onBarks(barks);
       if (cfg.roundSeconds && !warnedBell && cfg.roundSeconds - state.time <= 30) {
