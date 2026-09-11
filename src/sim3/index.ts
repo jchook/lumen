@@ -46,6 +46,8 @@ export interface Body {
   prize: boolean;
   /** Seconds until this body has actually arrived. While warping in it has no body and no pull. */
   warp: number;
+  /** Burning hard: the autopilot aims for `sprint` instead of cruise, whatever the distance. */
+  push: boolean;
 }
 
 /**
@@ -116,6 +118,8 @@ export interface Config {
   cruise: number;
   /** Autopilot: approach speed per px of remaining distance, so it arrives gently. */
   approach: number;
+  /** Autopilot speed while pushing (holding the tap): the way to outrun a hunter, at a price. */
+  sprint: number;
   /** Autopilot: velocity error below which it doesn't bother burning, px/s. */
   deadband: number;
   /** Autopilot: a point goal counts as reached inside this many px. */
@@ -168,6 +172,7 @@ export const defaultConfig: Config = {
   exhaustHalfLife: 1.2,
   cruise: 100,
   approach: 0.5,
+  sprint: 320,
   deadband: 10,
   arrive: 12,
   orbitDeadband: 16,
@@ -276,6 +281,7 @@ function makeBody(s: State, kind: Kind, x: number, y: number, mass: number, extr
     trait: "rival",
     prize: false,
     warp: 0,
+    push: false,
     ...extra,
   };
   s.bodies.push(b);
@@ -527,13 +533,14 @@ interface Mover {
  * One control step: the burn (direction and strength) that moves `b`'s velocity toward what it
  * needs to reach the target, which is moving at (tvx, tvy). Null when it's already close enough.
  */
-export function steer(b: Mover, tx: number, ty: number, tvx: number, tvy: number, cfg: Config): { dx: number; dy: number; strength: number } | null {
+export function steer(b: Mover, tx: number, ty: number, tvx: number, tvy: number, cfg: Config, push = false): { dx: number; dy: number; strength: number } | null {
   const [dx, dy] = delta(b.x, b.y, tx, ty, cfg);
   const d = Math.hypot(dx, dy);
   if (d < 1e-6) return null;
   const ux = dx / d;
   const uy = dy / d;
-  const speed = Math.min(cfg.cruise, cfg.approach * d);
+  // Pushing wants full speed regardless of distance: it is for getting away, not for arriving.
+  const speed = push ? cfg.sprint : Math.min(cfg.cruise, cfg.approach * d);
   let ex = tvx + ux * speed - b.vx;
   let ey = tvy + uy * speed - b.vy;
   // Never brake: if we're already closing faster than wanted, keep it. Only fix the sideways miss
@@ -631,7 +638,7 @@ function pilot(s: State, cfg: Config, ev: Ev[]): void {
       continue;
     }
     if (b.cooldown > 0) continue;
-    const c = b.goal.orbit && t.body ? steerOrbit(b, t.x, t.y, t.vx, t.vy, t.body.mass, b.goal.orbit, cfg) : steer(b, t.x, t.y, t.vx, t.vy, cfg);
+    const c = b.goal.orbit && t.body ? steerOrbit(b, t.x, t.y, t.vx, t.vy, t.body.mass, b.goal.orbit, cfg) : steer(b, t.x, t.y, t.vx, t.vy, cfg, b.push);
     if (!c) continue;
     const before = b.mass;
     if (burn(s, b.id, c.dx, c.dy, c.strength, cfg, ev)) b.spent += before - b.mass;

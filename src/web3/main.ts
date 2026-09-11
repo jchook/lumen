@@ -448,12 +448,24 @@ canvas.addEventListener("pointermove", (e) => {
   }
 });
 canvas.addEventListener("pointerleave", () => (pointer.inside = false));
+/** Holding a tap past a beat is a push: the autopilot burns for sprint speed until you let go. */
+let holdTimer = 0;
+function setPush(on: boolean): void {
+  const me = human(state);
+  if (me.push === on) return;
+  me.push = on;
+  if (on && me.alive && me.goal) say("push");
+}
 canvas.addEventListener("pointerdown", (e) => {
   pointer.x = e.clientX;
   pointer.y = e.clientY;
   pointer.down = true;
   pointer.inside = true;
   wake();
+  clearTimeout(holdTimer);
+  holdTimer = window.setTimeout(() => {
+    if (pointer.down && !manual.checked) setPush(true);
+  }, 220);
   if (!hinted) {
     hinted = true;
     hintEl.classList.add("gone");
@@ -466,7 +478,14 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 window.addEventListener("pointerup", () => {
   pointer.down = false;
+  clearTimeout(holdTimer);
+  setPush(false);
   wake();
+});
+window.addEventListener("pointercancel", () => {
+  pointer.down = false;
+  clearTimeout(holdTimer);
+  setPush(false);
 });
 // iOS only unlocks audio on the tail of a touch or a click, not on pointerdown.
 window.addEventListener("touchend", wake, { passive: true });
@@ -1385,6 +1404,7 @@ const SLIDERS: SliderDef[] = [
   { key: "radiusFloor", min: 0, max: 8, stepSize: 0.5 },
   { key: "exhaustHalfLife", min: 0.2, max: 6, stepSize: 0.1 },
   { key: "cruise", min: 40, max: 400, stepSize: 10 },
+  { key: "sprint", min: 100, max: 400, stepSize: 10 },
   { key: "roundSeconds", min: 0, max: 600, stepSize: 30, restart: true },
   { key: "prizeEvery", min: 0, max: 120, stepSize: 5 },
   { key: "flareEvery", min: 0, max: 120, stepSize: 5 },

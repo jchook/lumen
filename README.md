@@ -171,6 +171,10 @@ highways; getting into one is a maneuver you plan and pay for.
 toward the nearest giant on a sub-orbital path, gone in a while. Every 40 s each giant flares a ring
 of six small orbs outward and loses that mass, so giants slowly shrink over a round.
 
+**Push.** Hold a tap and the autopilot burns for sprint speed (320 px/s against a cruise of 100)
+toward that point until you let go, whatever the distance. It is the way to outrun a hunter, and it
+costs about a quarter of your mass to get up to speed, so it is a decision, not a default.
+
 **Rivals.** Each has a hidden temperament: a hunter stalks lights from far off with a thin margin
 from ten seconds in, a grazer never hunts lights, a coward keeps its distance. Everyone else waits
 25 s and wants a clear edge. A line of commentary above the hint says what they are up to ("Umbra
