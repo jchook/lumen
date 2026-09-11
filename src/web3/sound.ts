@@ -13,6 +13,8 @@
  */
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
+let masterTone: BiquadFilterNode | null = null;
+let stopped = false;
 let dry: GainNode | null = null;
 let send: GainNode | null = null;
 let muted = false;
@@ -189,7 +191,11 @@ export function soundInit(): void {
     comp.release.value = 0.3;
     master = c.createGain();
     master.gain.value = muted ? 0 : 0.6;
-    comp.connect(master).connect(c.destination);
+    masterTone = c.createBiquadFilter();
+    masterTone.type = "lowpass";
+    masterTone.frequency.value = 20000;
+    masterTone.Q.value = 0.5;
+    comp.connect(masterTone).connect(master).connect(c.destination);
     dry = c.createGain();
     dry.connect(comp);
     duck = c.createGain();
@@ -369,7 +375,7 @@ function startClock(): void {
 }
 
 function schedule(): void {
-  if (!ctx) return;
+  if (!ctx || stopped) return;
   const eighth = beat() / 2;
   while (nextEighth < ctx.currentTime + 0.3) {
     const i = eighthIndex;
@@ -866,32 +872,125 @@ export function soundBell(): void {
   setTimeout(() => bell(4, 4, 4.0, 0.11, CHURCH), 380);
 }
 
-/** Absorbed: the pad closes and a low tone falls away. */
+/** Every long-lived oscillator, so the tape can slow them together. */
+function tapeVoices(): OscillatorNode[] {
+  const out: OscillatorNode[] = padVoices.map((v) => v.o);
+  if (mono) out.push(...mono.oscs, ...mono.brightOscs);
+  if (tension) out.push(tension.o);
+  return out;
+}
+
+/**
+ * Absorbed: the tape stops. The clock halts, every voice slides down two and a half octaves over
+ * a second and a half while the mix darkens, then a sub boom lands and a slow chord in the sky's
+ * key blooms out into the room and hangs there.
+ */
 export function soundLost(): void {
-  if (!ctx || !dry || !padFilter) return;
+  if (!ctx || !dry || !send || !masterTone) return;
   const c = ctx;
   const t = c.currentTime;
-  padFilter.frequency.setTargetAtTime(90, t, 0.6);
-  for (const v of padVoices) v.g.gain.setTargetAtTime(0.01, t, 1.2);
+  stopped = true;
+  const slow = 1.5;
+  for (const o of tapeVoices()) {
+    hold(o.detune, t);
+    o.detune.linearRampToValueAtTime(o.detune.value - 3000, t + slow);
+  }
+  if (leadDelay) {
+    hold(leadDelay.delayTime, t);
+    leadDelay.delayTime.linearRampToValueAtTime(Math.min(1.9, beat() * 0.75 * 2.5), t + slow);
+  }
+  hold(masterTone.frequency, t);
+  masterTone.frequency.exponentialRampToValueAtTime(180, t + slow);
+  // Let the mix go quiet under the boom, then the chord has the room to itself.
+  if (mono) {
+    hold(mono.vca.gain, t);
+    mono.vca.gain.setTargetAtTime(0.0001, t + slow * 0.6, 0.3);
+  }
+  for (const v of padVoices) v.g.gain.setTargetAtTime(0.0001, t + slow * 0.7, 0.4);
+  if (tension) tension.g.gain.setTargetAtTime(0.0001, t, 0.2);
+  // The boom: a sub that starts at the root and sinks, with a little saturation.
+  const boomAt = t + slow;
   const o = c.createOscillator();
-  o.type = "triangle";
-  o.frequency.setValueAtTime(freq(0, 4), t);
-  o.frequency.exponentialRampToValueAtTime(freq(-3, 3), t + 1.6);
+  o.type = "sine";
+  o.frequency.setValueAtTime(freq(0, 2), boomAt);
+  o.frequency.exponentialRampToValueAtTime(freq(0, 2) * 0.45, boomAt + 2.4);
+  const shaper = c.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const x = (i / 255) * 2 - 1;
+    curve[i] = Math.tanh(x * 2.5) / Math.tanh(2.5);
+  }
+  shaper.curve = curve;
   const g = c.createGain();
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.14, t + 0.05);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);
-  o.connect(g).connect(dry);
-  if (send) g.connect(send);
-  o.start(t);
-  o.stop(t + 1.9);
+  g.gain.setValueAtTime(0.0001, boomAt);
+  g.gain.exponentialRampToValueAtTime(0.5, boomAt + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, boomAt + 2.8);
+  o.connect(shaper).connect(g).connect(dry);
+  const boomVerb = c.createGain();
+  boomVerb.gain.value = 0.5;
+  g.connect(boomVerb).connect(send);
+  o.start(boomAt);
+  o.stop(boomAt + 3);
+  // The chord: the mode's i chord with its sixth, voiced low and slow, blooming after the boom.
+  masterTone.frequency.setTargetAtTime(20000, boomAt + 0.3, 0.8);
+  const dryBus = dry;
+  const sendBus = send;
+  const voicing: Array<[number, number, number]> = [
+    [0, 3, 0.11],
+    [2, 3, 0.07],
+    [4, 3, 0.08],
+    [5, 4, 0.05],
+    [0, 4, 0.05],
+  ];
+  voicing.forEach(([deg, oct, gain], i) => {
+    const at = boomAt + 0.35 + i * 0.09;
+    const v = c.createOscillator();
+    v.type = i === 3 ? "triangle" : "sawtooth";
+    v.frequency.value = freq(deg, oct);
+    v.detune.value = rnd(-8, 8);
+    const lp = c.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(260, at);
+    lp.frequency.exponentialRampToValueAtTime(1600, at + 3.5);
+    lp.frequency.exponentialRampToValueAtTime(300, at + 9);
+    const vg = c.createGain();
+    vg.gain.setValueAtTime(0.0001, at);
+    vg.gain.exponentialRampToValueAtTime(gain, at + 2.2);
+    vg.gain.exponentialRampToValueAtTime(0.0001, at + 10);
+    v.connect(lp).connect(vg);
+    vg.connect(dryBus);
+    const toVerb = c.createGain();
+    toVerb.gain.value = 1.1;
+    vg.connect(toVerb).connect(sendBus);
+    v.start(at);
+    v.stop(at + 10.5);
+  });
 }
 
 /** A new sky: new key, the clock restarts, the pad opens back up. */
 export function soundReset(seed: number): string {
   const name = soundKey(seed);
+  stopped = false;
   if (ctx && padFilter) {
-    padFilter.frequency.setTargetAtTime(1100, ctx.currentTime, 0.8);
+    const t = ctx.currentTime;
+    for (const o of tapeVoices()) {
+      hold(o.detune, t);
+      o.detune.setTargetAtTime(0, t, 0.05);
+    }
+    if (mono) {
+      mono.brightOscs[1]!.detune.setTargetAtTime(BASS[song.bass].chorus || 0, t, 0.05);
+      mono.brightOscs[1]!.detune.value = BASS[song.bass].chorus || 0;
+    }
+    if (masterTone) {
+      hold(masterTone.frequency, t);
+      masterTone.frequency.setTargetAtTime(20000, t, 0.2);
+    }
+    for (const v of padVoices) {
+      v.g.gain.setTargetAtTime(0.0001, t, 0.1);
+      v.o.stop(t + 1);
+    }
+    padVoices = [];
+    padFilter.frequency.setTargetAtTime(1100, t, 0.8);
     if (leadDelay) leadDelay.delayTime.setTargetAtTime(beat() * 0.75, ctx.currentTime, 0.2);
     startClock();
   }
