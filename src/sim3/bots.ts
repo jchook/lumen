@@ -70,7 +70,7 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
   const path = predict(s, b, cfg, style.horizon);
   let worst: { gap: number; body: Body; dx: number; dy: number } | null = null;
   for (const o of s.bodies) {
-    if (o === b || !o.alive || o.mass <= b.mass) continue;
+    if (o === b || !o.alive || o.warp > 0 || o.mass <= b.mass) continue;
     const oR = radiusOf(o.mass, cfg);
     const [dx, dy] = delta(b.x, b.y, o.x, o.y, cfg);
     const gapNow = Math.hypot(dx, dy) - oR - myR;
@@ -120,7 +120,7 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
   }
   let best: { gain: number; id: number } | null = null;
   for (const o of s.bodies) {
-    if (o === b || !o.alive || o.mass >= b.mass || o.anchored || o.from) continue;
+    if (o === b || !o.alive || o.warp > 0 || o.mass >= b.mass || o.anchored || o.from) continue;
     // Hunting a rival is only worth it with a clear margin: a close race is lost on burn cost.
     if (o.kind === "light" && (!style.huntsLights || s.time < style.huntAfter || o.mass > b.mass / style.margin)) continue;
     const [dx0, dy0] = delta(b.x, b.y, o.x, o.y, cfg);

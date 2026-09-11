@@ -5,7 +5,7 @@ import { STYLES, botTurn, decide } from "./bots";
 const cfg: Config = { ...defaultConfig, roundSeconds: 0, prizeEvery: 0, flareEvery: 0 };
 const empty = (seed = 1): State => ({ seed, rng: () => 0.5, time: 0, onGrid: true, status: "playing", nextId: 1, bodies: [] });
 const add = (s: State, kind: "orb" | "light", x: number, y: number, mass: number, extra: Partial<State["bodies"][number]> = {}) => {
-  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, queue: [], spent: 0, trait: "rival" as const, prize: false, ...extra };
+  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, queue: [], spent: 0, trait: "rival" as const, prize: false, warp: 0, ...extra };
   s.bodies.push(b);
   return b;
 };
@@ -387,6 +387,19 @@ describe("rounds, prizes, flares", () => {
     const before = dist(prize, s.bodies[0]!, c);
     run(s, 8, c);
     expect(dist(prize, s.bodies[0]!, c)).toBeLessThan(before);
+  });
+  test("a prize warps in: untouchable and weightless until it has arrived", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    const p = add(s, "orb", 505, 500, 40, { prize: true, warp: 2 });
+    run(s, 1.5);
+    expect(me.alive).toBe(true);
+    expect(me.mass).toBe(10);
+    expect(me.x).toBe(500); // no pull either
+    run(s, 1);
+    expect(p.warp).toBe(0);
+    run(s, 1);
+    expect(me.mass).toBeLessThan(10);
   });
   test("a giant flares a ring of food and loses that mass", () => {
     const c = { ...cfg, flareEvery: 4 };

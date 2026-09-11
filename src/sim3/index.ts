@@ -44,6 +44,8 @@ export interface Body {
   trait: Trait;
   /** A prize: a heavy orb on a clock, falling toward a giant. */
   prize: boolean;
+  /** Seconds until this body has actually arrived. While warping in it has no body and no pull. */
+  warp: number;
 }
 
 /**
@@ -126,6 +128,8 @@ export interface Config {
   prizeEvery: number;
   prizeShare: number;
   prizeMin: number;
+  /** Seconds a prize takes to warp in, during which it can't touch or be touched. */
+  prizeWarp: number;
   /** Giant flares: seconds between them per giant (0 = never), orbs per flare, mass per orb. */
   flareEvery: number;
   flareCount: number;
@@ -171,6 +175,7 @@ export const defaultConfig: Config = {
   prizeEvery: 45,
   prizeShare: 0.7,
   prizeMin: 6,
+  prizeWarp: 4,
   flareEvery: 40,
   flareCount: 6,
   flareMass: 1,
@@ -236,7 +241,7 @@ const wrap = (v: number, n: number): number => ((v % n) + n) % n;
 export const human = (s: State): Body => s.bodies.find((b) => b.kind === "light" && !b.ai)!;
 export const lights = (s: State): Body[] => s.bodies.filter((b) => b.kind === "light" && b.alive);
 export const byId = (s: State, id: number): Body | undefined => s.bodies.find((b) => b.id === id);
-export const attracts = (b: Body, cfg: Config): boolean => b.alive && b.mass >= (b.kind === "light" ? cfg.lightGravityMass : cfg.gravityMass);
+export const attracts = (b: Body, cfg: Config): boolean => b.alive && b.warp <= 0 && b.mass >= (b.kind === "light" ? cfg.lightGravityMass : cfg.gravityMass);
 export const attractors = (s: State, cfg: Config): Body[] => s.bodies.filter((b) => attracts(b, cfg));
 
 /** How much of a full burn a light of this mass actually gets. */
@@ -270,6 +275,7 @@ function makeBody(s: State, kind: Kind, x: number, y: number, mass: number, extr
     spent: 0,
     trait: "rival",
     prize: false,
+    warp: 0,
     ...extra,
   };
   s.bodies.push(b);
@@ -609,7 +615,7 @@ export function plan(s: State, me: Body, goal: Goal, cfg: Config, seconds = 6, d
   const g: Mover & { cooldown: number } = { x: me.x, y: me.y, vx: me.vx, vy: me.vy, mass: me.mass, cooldown: me.cooldown };
   // Anything heavier than me is a wall, followed along its own predicted path.
   const walls = s.bodies
-    .filter((b) => b.alive && b !== me && b !== target && b.mass > me.mass && !b.from)
+    .filter((b) => b.alive && b.warp <= 0 && b !== me && b !== target && b.mass > me.mass && !b.from)
     .map((b) => ({ r: radiusOf(b.mass, cfg), id: b.id, path: b.anchored ? null : predict(s, b, cfg, seconds, dt), x: b.x, y: b.y }));
   const path: Plan["path"] = [];
   let cost = 0;
@@ -714,6 +720,7 @@ function move(s: State, cfg: Config, dt: number, ev: Ev[]): void {
     b.x = wrap(b.x + b.vx * dt, cfg.width);
     b.y = wrap(b.y + b.vy * dt, cfg.height);
     if (b.cooldown > 0) b.cooldown = Math.max(0, b.cooldown - dt);
+    if (b.warp > 0) b.warp = Math.max(0, b.warp - dt);
     if (b.from) {
       b.mass *= Math.pow(0.5, dt / cfg.exhaustHalfLife);
       if (b.mass <= cfg.dust) vanish(s, b, 0, ev);
@@ -732,10 +739,10 @@ function absorb(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   const bs = s.bodies;
   for (let i = 0; i < bs.length; i++) {
     const a = bs[i]!;
-    if (!a.alive) continue;
+    if (!a.alive || a.warp > 0) continue;
     for (let j = i + 1; j < bs.length; j++) {
       const b = bs[j]!;
-      if (!b.alive || a.mass === b.mass) continue;
+      if (!b.alive || b.warp > 0 || a.mass === b.mass) continue;
       const [big, small] = a.mass > b.mass ? [a, b] : [b, a];
       const d = dist(a, b, cfg);
       const overlap = radiusOf(big.mass, cfg) + radiusOf(small.mass, cfg) - d;
@@ -791,7 +798,7 @@ function prizes(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   const d = Math.hypot(dx, dy) || 1;
   // Sub-orbital: it spirals in and is gone in a while.
   const v = orbitalSpeed(near.mass, d, cfg) * 0.5;
-  const p = makeBody(s, "orb", bx, by, mass, { vx: (-dy / d) * v + near.vx, vy: (dx / d) * v + near.vy, prize: true });
+  const p = makeBody(s, "orb", bx, by, mass, { vx: (-dy / d) * v + near.vx, vy: (dx / d) * v + near.vy, prize: true, warp: cfg.prizeWarp });
   ev.push({ type: "prize", id: p.id, x: p.x, y: p.y, mass });
 }
 
@@ -894,7 +901,7 @@ export function predict(s: State, b: Body, cfg: Config, seconds: number, dt = 0.
 /** Everything heavier than `b` that could reach it: for camera and threat display. */
 export function threats(s: State, b: Body, cfg: Config): Array<{ body: Body; d: number }> {
   return s.bodies
-    .filter((o) => o.alive && o !== b && o.mass > b.mass)
+    .filter((o) => o.alive && o.warp <= 0 && o !== b && o.mass > b.mass)
     .map((o) => ({ body: o, d: dist(b, o, cfg) - radiusOf(o.mass, cfg) - radiusOf(b.mass, cfg) }))
     .sort((p, q) => p.d - q.d);
 }

@@ -742,6 +742,24 @@ function drawWorld(dt: number): void {
     if (sx + r * 3 < 0 || sx - r * 3 > W || sy + r * 3 < 0 || sy - r * 3 > H) continue;
     const hue = hueOf(b, me);
     const isLight = b.kind === "light";
+    if (b.warp > 0) {
+      // Arriving: a dotted outline where it will be, and an arc that closes as it lands.
+      const done = 1 - b.warp / Math.max(0.01, cfg.prizeWarp);
+      ctx.strokeStyle = `hsla(${hue} / 0.45)`;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 6]);
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = `hsla(${hue} / 0.9)`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r + 6, -Math.PI / 2, -Math.PI / 2 + done * Math.PI * 2);
+      ctx.stroke();
+      labels.push({ text: `${b.mass.toFixed(0)} · in ${b.warp.toFixed(1)}s`, x: sx, y: sy - r - 12, hue });
+      continue;
+    }
     if (b.from) {
       ctx.fillStyle = `hsla(${hue} / 0.55)`;
       ctx.beginPath();
@@ -835,7 +853,7 @@ function drawUi(): void {
     }
     if (hit) {
       const b = hit.b;
-      const verdict = b.mass > me.mass ? "absorbs you" : b.mass < me.mass ? "food" : "equal";
+      const verdict = b.warp > 0 ? `arriving in ${b.warp.toFixed(1)}s` : b.mass > me.mass ? "absorbs you" : b.mass < me.mass ? "food" : "equal";
       // Its path, and where my path comes closest to it. Green when that's a catch.
       if (!b.anchored) {
         const theirs = predict(state, b, cfg, 4, 0.1);
