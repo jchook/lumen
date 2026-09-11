@@ -1090,12 +1090,14 @@ export function soundBurn(strength: number): void {
   const down = slot % 8 === 0;
   const onBeat = slot % 4 === 0;
   const off = slot % 2 === 1;
-  // Pitched body: a sine that drops fast, tuned to root (kick) or fifth (tom).
+  // Pitched body: a sine that drops fast, tuned to the key. The downbeat is a low kick on the root;
+  // everything else sits an octave above the bass (fifth, then root) so it is heard as its own
+  // voice, a wood tom, and not lost under the kick and the bass line.
   const body = c.createOscillator();
   body.type = "sine";
-  const f0 = down ? freq(0, 2) : onBeat ? freq(4, 2) : freq(0, 3);
-  body.frequency.setValueAtTime(f0 * (down ? 3.2 : 2.2), t);
-  body.frequency.exponentialRampToValueAtTime(f0, t + (down ? 0.09 : 0.05));
+  const f0 = down ? freq(0, 2) : onBeat ? freq(4, 3) : freq(0, 4);
+  body.frequency.setValueAtTime(f0 * (down ? 3.2 : 2.4), t);
+  body.frequency.exponentialRampToValueAtTime(f0, t + (down ? 0.09 : 0.06));
   const drive = c.createWaveShaper();
   const curve = new Float32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -1104,8 +1106,8 @@ export function soundBurn(strength: number): void {
   }
   drive.curve = curve;
   const bg = c.createGain();
-  const peak = (off ? 0.07 : down ? 0.26 : 0.17) * (0.5 + 0.5 * k);
-  const life = off ? 0.09 : down ? 0.32 : 0.2;
+  const peak = (off ? 0.14 : down ? 0.3 : 0.24) * (0.5 + 0.5 * k);
+  const life = off ? 0.16 : down ? 0.32 : 0.24;
   bg.gain.setValueAtTime(0.0001, t);
   bg.gain.exponentialRampToValueAtTime(peak, t + 0.006);
   bg.gain.exponentialRampToValueAtTime(0.0001, t + life);
@@ -1127,6 +1129,20 @@ export function soundBurn(strength: number): void {
   cg.gain.exponentialRampToValueAtTime(0.0001, t + (off ? 0.03 : 0.045));
   click.connect(hp).connect(cg).connect(drumBus ?? dry);
   click.start(t);
+  // The exhaust: a puff of air in the upper mids, a band the pad and the bass leave empty, on every
+  // burn whatever the slot. It is the part that always says "burning", louder the harder the burn.
+  const puff = noise(0.16);
+  const pb = c.createBiquadFilter();
+  pb.type = "bandpass";
+  pb.frequency.setValueAtTime(1500, t);
+  pb.frequency.exponentialRampToValueAtTime(700, t + 0.14);
+  pb.Q.value = 1.1;
+  const pg = c.createGain();
+  pg.gain.setValueAtTime(0.0001, t);
+  pg.gain.exponentialRampToValueAtTime(0.09 * (0.4 + 0.6 * k), t + 0.008);
+  pg.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+  puff.connect(pb).connect(pg).connect(dry);
+  puff.start(t);
 }
 
 /** A giant sheds a ring: a bright shimmer that spreads out. */
