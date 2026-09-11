@@ -1,5 +1,7 @@
 # LUMEN
 
+**Play:** https://jchook.github.io/lumen/ (deployed from `main` by GitHub Actions). The turn-based versions are at `/v2` and `/v1`.
+
 Tap an orb. Your light jumps to it and absorbs it. Every collection pulls the rest of the
 universe toward that point, including the things that can eat you. Touching lights fuse.
 Travelling costs light, and the universe runs out of it. The bigger light absorbs the smaller.
