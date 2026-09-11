@@ -26,14 +26,16 @@ export interface BotStyle {
   margin: number;
   /** Whether it hunts lights at all. */
   huntsLights: boolean;
+  /** No hunting lights before this many seconds: everyone gets an opening. */
+  huntAfter: number;
 }
 
-export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 5, margin: 1.4, huntsLights: true };
+export const defaultStyle: BotStyle = { sense: 520, fear: 140, greed: 1.8, think: 0.55, horizon: 5, margin: 1.4, huntsLights: true, huntAfter: 25 };
 
 /** Temperaments. A hunter takes close fights; a grazer never hunts lights; a coward keeps its distance. */
 export const STYLES: Record<Trait, BotStyle> = {
   rival: defaultStyle,
-  hunter: { ...defaultStyle, sense: 640, fear: 110, greed: 1.4, margin: 1.15 },
+  hunter: { ...defaultStyle, sense: 640, fear: 110, greed: 1.4, margin: 1.3, huntAfter: 15 },
   grazer: { ...defaultStyle, greed: 1.6, fear: 170, huntsLights: false },
   coward: { ...defaultStyle, fear: 260, greed: 2.0, margin: 2.5 },
 };
@@ -120,7 +122,7 @@ export function decide(s: State, id: number, cfg: Config, style: BotStyle = defa
   for (const o of s.bodies) {
     if (o === b || !o.alive || o.mass >= b.mass || o.anchored || o.from) continue;
     // Hunting a rival is only worth it with a clear margin: a close race is lost on burn cost.
-    if (o.kind === "light" && (!style.huntsLights || o.mass > b.mass / style.margin)) continue;
+    if (o.kind === "light" && (!style.huntsLights || s.time < style.huntAfter || o.mass > b.mass / style.margin)) continue;
     const [dx0, dy0] = delta(b.x, b.y, o.x, o.y, cfg);
     if (Math.hypot(dx0, dy0) > style.sense) continue;
     const p = plan(s, b, { x: o.x, y: o.y, follow: o.id }, cfg, style.horizon, 0.2);

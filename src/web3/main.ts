@@ -2,6 +2,7 @@ import {
   burn,
   burnDeltaV,
   defaultConfig,
+  attracts,
   plan,
   setGoal,
   delta,
@@ -21,6 +22,8 @@ import {
   type State,
 } from "../sim3";
 import { botTurn, type Memories } from "../sim3/bots";
+import { createBloom } from "./bloom";
+import { soundAbsorb, soundBell, soundBurn, soundInit, soundLost, soundMute, soundMuted, soundPrize, soundThreat } from "./sound";
 
 // ---------- config + persistence ----------
 
@@ -62,6 +65,7 @@ const $ = (id: string) => document.getElementById(id)!;
 const lightEl = $("light");
 const rankEl = $("rank");
 const levelEl = $("level");
+const clockEl = $("clock");
 const hintEl = $("hint");
 const endEl = $("end");
 const endTitle = $("endtitle");
@@ -70,6 +74,16 @@ const panel = $("panel");
 const logEl = $("log");
 const showPath = $("showpath") as HTMLInputElement;
 const showAll = $("showall") as HTMLInputElement;
+const bloomBox = $("bloom") as HTMLInputElement;
+const glowCanvas = $("glow") as HTMLCanvasElement;
+try {
+  bloomBox.checked = localStorage.getItem("lumen3.bloom") !== "0";
+} catch {}
+bloomBox.addEventListener("change", () => {
+  try {
+    localStorage.setItem("lumen3.bloom", bloomBox.checked ? "1" : "0");
+  } catch {}
+});
 
 let W = 0;
 let H = 0;
@@ -90,8 +104,31 @@ resize();
 
 // ---------- game state ----------
 
-let seed = (Date.now() % 100000) | 0;
+/** The sky is in the URL: #s=<seed>&r=<rivals>, so a link is a challenge. */
+function readUrl(): { seed: number | null; rivals: number | null } {
+  const m = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const seed = Number(m.get("s"));
+  const rivals = Number(m.get("r"));
+  return { seed: Number.isFinite(seed) && m.has("s") ? seed : null, rivals: Number.isFinite(rivals) && m.has("r") ? rivals : null };
+}
+function writeUrl(): void {
+  try {
+    history.replaceState(null, "", `#s=${seed}&r=${cfg.players - 1}`);
+  } catch {}
+}
+const fromUrl = readUrl();
+if (fromUrl.rivals !== null) {
+  const idx = LEVELS.indexOf(fromUrl.rivals);
+  if (idx >= 0) {
+    level = idx;
+    applyLevel();
+  }
+}
+let seed = fromUrl.seed ?? (Date.now() % 100000) | 0;
 let state: State = newGame(seed, cfg);
+try {
+  if (localStorage.getItem("lumen3.mute") === "1") soundMute(true);
+} catch {}
 let mem: Memories = new Map();
 let acc = 0;
 let last = performance.now();
@@ -133,6 +170,7 @@ function reset(newSeed: number): void {
   cam.x = human(state).x;
   cam.y = human(state).y;
   endEl.classList.remove("on");
+  writeUrl();
   say(`seed ${seed} · ${cfg.players - 1} rivals`);
 }
 
@@ -232,6 +270,11 @@ function under(me: Body): Body | null {
 function goalAtCursor(me: Body): Goal {
   const b = under(me);
   if (b && b.mass < me.mass) return { x: b.x, y: b.y, follow: b.id };
+  if (b && attracts(b, cfg)) {
+    // Something that could eat me and pulls: enter orbit at my current distance, not too close.
+    const r = Math.max(radiusOf(b.mass, cfg) + radiusOf(me.mass, cfg) + 70, dist(me, b, cfg));
+    return { x: b.x, y: b.y, follow: b.id, orbit: r };
+  }
   const [x, y] = toWorld(pointer.x, pointer.y);
   return { x, y, follow: 0 };
 }
@@ -258,7 +301,7 @@ function tap(): void {
   const g = goalAtCursor(me);
   setGoal(state, me.id, g);
   const t = g.follow ? state.bodies.find((b) => b.id === g.follow) : null;
-  say(t ? `→ ${t.kind === "light" ? t.name : `${t.mass.toFixed(1)}-lumen orb`}` : "→ point");
+  say(g.orbit ? `orbit a ${t?.mass.toFixed(0)} at ${g.orbit.toFixed(0)}` : t ? `→ ${t.kind === "light" ? t.name : `${t.mass.toFixed(1)}-lumen orb`}` : "→ point");
 }
 
 canvas.addEventListener("pointermove", (e) => {
@@ -281,6 +324,7 @@ canvas.addEventListener("pointerdown", (e) => {
   pointer.y = e.clientY;
   pointer.down = true;
   pointer.inside = true;
+  soundInit();
   if (!hinted) {
     hinted = true;
     hintEl.classList.add("gone");
@@ -293,6 +337,14 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 window.addEventListener("pointerup", () => (pointer.down = false));
 window.addEventListener("keydown", (e) => {
+  soundInit();
+  if (e.key === "m" || e.key === "M") {
+    soundMute(!soundMuted());
+    try {
+      localStorage.setItem("lumen3.mute", soundMuted() ? "1" : "0");
+    } catch {}
+    say(soundMuted() ? "sound off" : "sound on");
+  }
   if (e.key === " ") {
     e.preventDefault();
     setGoal(state, human(state).id, null);
@@ -342,15 +394,38 @@ function hueOf(b: Body, me: Body): string {
     const owner = state.bodies.find((x) => x.id === b.from);
     if (owner) return identity(owner);
   }
+  if (b.prize && b.mass < me.mass) return "48 100% 65%";
   if (b.mass > me.mass) return b.mass > me.mass * 3 ? "18 100% 62%" : "348 90% 66%";
   if (b.mass < me.mass) return b.mass < me.mass * 0.2 ? "215 50% 88%" : "200 85% 78%";
   return "220 10% 70%";
 }
 
 function onEvents(ev: Ev[]): void {
+  const me = human(state);
   for (const e of ev) {
-    if (e.type === "burn") {
+    if (e.type === "absorb") {
+      if (e.eater === me.id && e.amount > 0.02) soundAbsorb(e.amount);
+    } else if (e.type === "prize") {
+      say(`a ${e.mass.toFixed(0)}-lumen prize is falling`);
+      soundPrize();
+    } else if (e.type === "flare") {
+      const g = state.bodies.find((x) => x.id === e.id);
+      if (g) {
+        for (let i = 0; i < 14; i++) {
+          const a = (i / 14) * Math.PI * 2;
+          puffs.push({ x: g.x, y: g.y, vx: Math.cos(a) * 160, vy: Math.sin(a) * 160, age: 0, hue: "35 100% 75%" });
+        }
+      }
+    } else if (e.type === "bell") {
+      const w = state.bodies.find((x) => x.id === e.winner);
+      const mine = w === me;
+      endTitle.textContent = mine ? "THE BELL · YOURS" : `THE BELL · ${w?.name.toUpperCase() ?? "NOBODY"}`;
+      endSub.innerHTML = `${me.mass.toFixed(1)} lumens on seed ${seed} · <a href="${location.href}">this sky's link</a> · tap for a new one`;
+      endEl.classList.add("on");
+      soundBell();
+    } else if (e.type === "burn") {
       const b = state.bodies.find((x) => x.id === e.id);
+      if (b === me) soundBurn(Math.min(1, e.mass / (me.mass * cfg.burnFraction + 1e-6)));
       if (b) {
         const s = spring(b);
         s.v -= 40;
@@ -366,12 +441,14 @@ function onEvents(ev: Ev[]): void {
       const who = by?.name || `a ${by?.mass.toFixed(0)}-lumen body`;
       say(`${e.name} absorbed by ${who}`);
     } else if (e.type === "over") {
-      const me = human(state);
+      if (state.time < cfg.roundSeconds || !cfg.roundSeconds) soundLost();
+      if (me.alive) continue; // the bell already spoke
       endTitle.textContent = "ABSORBED";
       const killer = log[0]?.replace(/^You absorbed by /, "") ?? "";
       endSub.textContent = `${killer ? `by ${killer} · ` : ""}${me.mass.toFixed(1)} lumens at the end · tap for a new sky`;
       endEl.classList.add("on");
     } else if (e.type === "win") {
+      soundBell();
       endTitle.textContent = "LAST LIGHT";
       endSub.textContent = `${human(state).mass.toFixed(1)} lumens · ${state.time.toFixed(0)}s · tap for a new sky`;
       endEl.classList.add("on");
@@ -468,10 +545,11 @@ function drawPath(b: Body, alpha: number): void {
 
 function drawEdgeMarkers(me: Body): void {
   const z = zoom();
-  for (const t of threats(state, me, cfg)) {
-    if (t.d > 1400) break;
-    // Only things that can come for me: lights, and bodies heavy enough to pull.
-    if (t.body.kind !== "light" && t.body.mass < cfg.gravityMass) continue;
+  const prizes = state.bodies.filter((b) => b.alive && b.prize && b.mass < me.mass).map((body) => ({ body, d: dist(me, body, cfg) }));
+  for (const t of [...prizes, ...threats(state, me, cfg)]) {
+    if (t.d > 1400 && !t.body.prize) break;
+    // Only things that can come for me: lights, and bodies heavy enough to pull. And prizes.
+    if (!t.body.prize && t.body.kind !== "light" && t.body.mass < cfg.gravityMass) continue;
     const [sx, sy] = toScreen(t.body.x, t.body.y);
     const r = radiusOf(t.body.mass, cfg) * z;
     if (sx + r > 0 && sx - r < W && sy + r > 0 && sy - r < H) continue;
@@ -560,6 +638,30 @@ function draw(dt: number): void {
     ctx.stroke();
   }
 
+  // Orbit lanes: faint rings around anything that pulls, and the lane I'm holding in my colour.
+  for (const b of state.bodies) {
+    if (!b.alive || !attracts(b, cfg) || b === me) continue;
+    const [sx, sy] = toScreen(b.x, b.y);
+    const R = radiusOf(b.mass, cfg);
+    for (const extra of [110, 220]) {
+      const r = (R + extra) * z;
+      if (r > Math.max(W, H)) continue;
+      ctx.strokeStyle = "hsla(30 80% 80% / 0.07)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (me.alive && me.goal?.orbit && me.goal.follow === b.id) {
+      ctx.strokeStyle = `hsla(${identity(me)} / 0.45)`;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.arc(sx, sy, me.goal.orbit * z, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
   // Bodies, big first so lights and orbs sit on top of sun halos.
   const bodies = state.bodies.filter((b) => b.alive).sort((a, b) => b.mass - a.mass);
   for (const b of bodies) {
@@ -599,6 +701,15 @@ function draw(dt: number): void {
       ctx.arc(sx, sy, Math.max(0.8, r * (b.mass >= cfg.gravityMass ? 0.82 : 0.5)), 0, Math.PI * 2);
       ctx.fill();
     }
+    if (b.prize) {
+      // A prize pulses so it reads as an event, not scenery.
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 180);
+      ctx.strokeStyle = `hsla(48 100% 70% / ${0.35 + 0.5 * pulse})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r + 6 + pulse * 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     if (heavier && isLight) {
       ctx.strokeStyle = "hsla(350 90% 65% / 0.8)";
       ctx.lineWidth = 1.5;
@@ -628,6 +739,12 @@ function draw(dt: number): void {
   }
 
   if (me.alive) drawEdgeMarkers(me);
+  drawMinimap(me);
+  // The hum: how close the nearest thing that can eat me is, on a 0..1 scale.
+  if (me.alive) {
+    const near = threats(state, me, cfg).filter((t) => t.body.kind === "light" || attracts(t.body, cfg))[0];
+    soundThreat(near ? Math.max(0, 1 - near.d / 260) : 0);
+  } else soundThreat(0);
 
   // Hover: the lumens of whatever is under the cursor.
   if (pointer.inside) {
@@ -683,7 +800,11 @@ function draw(dt: number): void {
       ctx.textAlign = "center";
       ctx.fillStyle = `hsla(${hueOf(b, me)} / 0.95)`;
       const price = route && route.goal.follow === b.id
-        ? route.plan.blocked
+        ? route.goal.orbit
+          ? route.plan.arrives
+            ? ` · orbit for ${route.plan.cost.toFixed(1)}`
+            : " · orbit (costly)"
+          : route.plan.blocked
           ? " · route hits something heavier"
           : route.plan.arrives
             ? ` · ${route.plan.cost.toFixed(1)} to catch in ${route.plan.t.toFixed(0)}s`
@@ -728,6 +849,54 @@ function draw(dt: number): void {
   }
 }
 
+/** The whole torus in a corner: pulls, lights, prizes, food, and the view. */
+function drawMinimap(me: Body): void {
+  const size = Math.min(180, Math.floor(Math.min(W, H) * 0.24));
+  const pad = 14;
+  const x0 = W - size - pad;
+  const y0 = H - size - pad;
+  const k = size / cfg.width;
+  ctx.fillStyle = "rgba(5, 6, 12, 0.7)";
+  ctx.fillRect(x0, y0, size, size);
+  ctx.strokeStyle = "rgba(120, 140, 200, 0.25)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x0 + 0.5, y0 + 0.5, size - 1, size - 1);
+  // Centre the map on me so the view never straddles the seam.
+  const cx = me.x;
+  const cy = me.y;
+  const at = (b: { x: number; y: number }): [number, number] => {
+    const [dx, dy] = delta(cx, cy, b.x, b.y, cfg);
+    return [x0 + size / 2 + dx * k, y0 + size / 2 + dy * k];
+  };
+  for (const b of state.bodies) {
+    if (!b.alive || b.from) continue;
+    const [px, py] = at(b);
+    if (b.kind === "light") {
+      ctx.fillStyle = `hsl(${identity(b)})`;
+      ctx.beginPath();
+      ctx.arc(px, py, b === me ? 3 : 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (attracts(b, cfg)) {
+      ctx.fillStyle = "hsla(30 90% 70% / 0.8)";
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(2, radiusOf(b.mass, cfg) * k), 0, Math.PI * 2);
+      ctx.fill();
+    } else if (b.prize) {
+      ctx.fillStyle = "hsl(48 100% 65%)";
+      ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+    } else {
+      ctx.fillStyle = b.mass < me.mass ? "hsla(210 60% 85% / 0.55)" : "hsla(350 80% 65% / 0.55)";
+      ctx.fillRect(px - 0.5, py - 0.5, 1.2, 1.2);
+    }
+  }
+  // The view.
+  const vw = (W / zoom()) * k;
+  const vh = (H / zoom()) * k;
+  const [vx, vy] = at(cam);
+  ctx.strokeStyle = "rgba(220, 230, 255, 0.35)";
+  ctx.strokeRect(vx - vw / 2, vy - vh / 2, vw, vh);
+}
+
 // ---------- hud ----------
 
 function hud(): void {
@@ -737,9 +906,14 @@ function hud(): void {
     .filter((b) => b.kind === "light")
     .sort((a, b) => b.mass - a.mass);
   rankEl.innerHTML = ranked
-    .map((b) => `<span style="color:hsl(${identity(b)})${b.alive ? "" : ";opacity:.35;text-decoration:line-through"}"><b>${b.name}</b> ${b.mass.toFixed(1)}</span>`)
+    .map((b) => `<span style="color:hsl(${identity(b)})${b.alive ? "" : ";opacity:.35;text-decoration:line-through"}"><b>${b.name}</b> ${b.mass.toFixed(1)}${b.ai && b.trait !== "rival" ? `<i>${b.trait}</i>` : ""}</span>`)
     .join("");
-  levelEl.textContent = `${cfg.players - 1} rival${cfg.players - 1 === 1 ? "" : "s"} · ${state.time.toFixed(0)}s · seed ${seed}`;
+  const left = cfg.roundSeconds ? Math.max(0, cfg.roundSeconds - state.time) : state.time;
+  const mm = Math.floor(left / 60);
+  const ss = Math.floor(left % 60);
+  clockEl.textContent = `${mm}:${String(ss).padStart(2, "0")}`;
+  clockEl.classList.toggle("late", cfg.roundSeconds > 0 && left < 30);
+  levelEl.textContent = `· ${cfg.players - 1} rival${cfg.players - 1 === 1 ? "" : "s"} · seed ${seed}`;
 }
 
 // ---------- loop ----------
@@ -760,9 +934,13 @@ function frame(now: number): void {
   }
   updateCamera(elapsed);
   draw(elapsed);
+  const glowing = bloomBox.checked && bloom.ok;
+  glowCanvas.classList.toggle("off", !glowing);
+  if (glowing) bloom.render();
   hud();
   requestAnimationFrame(frame);
 }
+const bloom = createBloom(canvas, glowCanvas);
 requestAnimationFrame(frame);
 
 // ---------- tuning panel ----------
@@ -789,6 +967,9 @@ const SLIDERS: SliderDef[] = [
   { key: "radiusFloor", min: 0, max: 8, stepSize: 0.5 },
   { key: "exhaustHalfLife", min: 0.2, max: 6, stepSize: 0.1 },
   { key: "cruise", min: 40, max: 400, stepSize: 10 },
+  { key: "roundSeconds", min: 0, max: 600, stepSize: 30, restart: true },
+  { key: "prizeEvery", min: 0, max: 120, stepSize: 5 },
+  { key: "flareEvery", min: 0, max: 120, stepSize: 5 },
   { key: "approach", min: 0.2, max: 3, stepSize: 0.1 },
 ];
 const slidersEl = $("sliders");
@@ -831,6 +1012,7 @@ $("reset").addEventListener("click", () => {
   buildSliders();
   reset(seed);
 });
+writeUrl();
 say(`seed ${seed} · ${cfg.players - 1} rivals`);
 
 // Debug hook for headless checks.

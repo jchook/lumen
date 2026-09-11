@@ -410,6 +410,7 @@ describe("traits", () => {
     decide(g, grazer.id, cfg, STYLES.grazer);
     expect(grazer.goal).toBeNull();
     const h = empty();
+    h.time = 60;
     const hunter = add(h, "light", 500, 500, 10, { name: "Umbra", ai: true, trait: "hunter" });
     const prey = add(h, "light", 650, 500, 3, { name: "You" });
     decide(h, hunter.id, cfg, STYLES.hunter);
