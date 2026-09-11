@@ -102,6 +102,8 @@ export interface Config {
   ejectSpeed: number;
   /** Seconds between burns. */
   burnCooldown: number;
+  /** Burns only land on this grid (seconds), so they fall on the beat. 0 = any time. */
+  burnGrid: number;
   /** A light this small can no longer burn. */
   minBurnMass: number;
   /** Bodies below this mass vanish. */
@@ -155,7 +157,8 @@ export const defaultConfig: Config = {
   absorbRate: 2.5,
   burnFraction: 0.035,
   ejectSpeed: 1100,
-  burnCooldown: 0.2,
+  burnCooldown: 0.15,
+  burnGrid: 0,
   minBurnMass: 0.5,
   dust: 0.05,
   exhaustHalfLife: 1.2,
@@ -188,6 +191,8 @@ export interface State {
   seed: number;
   rng: () => number;
   time: number;
+  /** True for the step after the clock crossed a burn-grid line. */
+  onGrid: boolean;
   status: "playing" | "over" | "won";
   nextId: number;
   bodies: Body[];
@@ -316,7 +321,7 @@ export function newGame(seed: number, cfg: Config = defaultConfig): State {
 }
 
 function generate(seed: number, cfg: Config): State {
-  const s: State = { seed, rng: mulberry32(seed), time: 0, status: "playing", nextId: 1, bodies: [] };
+  const s: State = { seed, rng: mulberry32(seed), time: 0, onGrid: true, status: "playing", nextId: 1, bodies: [] };
   const rng = s.rng;
   const cx = cfg.width / 2;
   const cy = cfg.height / 2;
@@ -431,6 +436,7 @@ export function cloneState(s: State): State {
 export function burn(s: State, id: number, dx: number, dy: number, strength: number, cfg: Config, ev: Ev[] = []): boolean {
   const b = byId(s, id);
   if (!b || b.kind !== "light" || !b.alive || b.cooldown > 0) return false;
+  if (cfg.burnGrid > 0 && !s.onGrid) return false;
   const len = Math.hypot(dx, dy);
   if (len < 1e-6) return false;
   const k = Math.min(1, Math.max(0.15, strength));
@@ -843,7 +849,9 @@ export function step(s: State, cfg: Config, dt: number, ev: Ev[] = []): Ev[] {
   absorb(s, cfg, dt, ev);
   // Sweep the dead so the pair loop stays cheap.
   s.bodies = s.bodies.filter((b) => b.alive || b.kind === "light");
+  const prev = s.time;
   s.time += dt;
+  s.onGrid = cfg.burnGrid <= 0 || Math.floor(s.time / cfg.burnGrid) !== Math.floor(prev / cfg.burnGrid);
   prizes(s, cfg, dt, ev);
   flares(s, cfg, dt, ev);
   finish(s, cfg, ev);

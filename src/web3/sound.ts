@@ -238,12 +238,23 @@ export const soundMuted = (): boolean => muted;
 let nextBeat = 0;
 let beatIndex = 0;
 let clockTimer = 0;
+let clockStart = 0;
+
+/** Seconds per beat of the current song. */
+export const soundBeat = (): number => beat();
+/** Which sixteenth of the bar we're on right now, 0..15. */
+function slotNow(): number {
+  if (!ctx) return 0;
+  const six = beat() / 4;
+  return ((Math.round((ctx.currentTime - clockStart) / six) % 16) + 16) % 16;
+}
 const bass = { degree: -7, rests: 0 };
 let ducked = 0; // threat level, closes the pad
 
 function startClock(): void {
   if (!ctx) return;
   nextBeat = ctx.currentTime + 0.1;
+  clockStart = nextBeat;
   beatIndex = 0;
   playChord(nextBeat);
   clearInterval(clockTimer);
@@ -434,38 +445,58 @@ function bell(deg: number, oct: number, dur: number, gain: number, partials: Arr
 const SOFT: Array<[number, number, number]> = [[1, 1, 1], [2.01, 0.3, 0.6], [3.02, 0.1, 0.35]];
 const CHURCH: Array<[number, number, number]> = [[1, 1, 1], [2.76, 0.45, 0.7], [5.4, 0.2, 0.45], [8.9, 0.08, 0.3]];
 
-/** Burning: a falling band of air with a little low push. */
+/**
+ * Burning is the drum kit. Every burn lands on a sixteenth of the song (the sim only lets burns
+ * happen on the grid), and the sound depends on where in the bar it falls: downbeats get a low kick
+ * tuned to the key's root, other on-beats a tom on the fifth, off-beats a tight tick. Strength sets
+ * how hard it's hit. Together, everyone's burning is the rhythm section.
+ */
 export function soundBurn(strength: number): void {
   if (!ctx || !dry || !send) return;
   const c = ctx;
   const t = c.currentTime;
   const k = Math.min(1, Math.max(0.15, strength));
-  const n = noise(0.4);
-  const f = c.createBiquadFilter();
-  f.type = "bandpass";
-  f.Q.value = 1.2;
-  f.frequency.setValueAtTime(1400 + 1400 * k, t);
-  f.frequency.exponentialRampToValueAtTime(220, t + 0.3);
-  const g = c.createGain();
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.04 + 0.08 * k, t + 0.015);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
-  n.connect(f).connect(g);
-  g.connect(dry);
+  const slot = slotNow();
+  const down = slot % 8 === 0;
+  const onBeat = slot % 4 === 0;
+  const off = slot % 2 === 1;
+  // Pitched body: a sine that drops fast, tuned to root (kick) or fifth (tom).
+  const body = c.createOscillator();
+  body.type = "sine";
+  const f0 = down ? freq(0, 2) : onBeat ? freq(4, 2) : freq(0, 3);
+  body.frequency.setValueAtTime(f0 * (down ? 3.2 : 2.2), t);
+  body.frequency.exponentialRampToValueAtTime(f0, t + (down ? 0.09 : 0.05));
+  const drive = c.createWaveShaper();
+  const curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const x = (i / 255) * 2 - 1;
+    curve[i] = Math.tanh(x * (down ? 2.2 : 1.4));
+  }
+  drive.curve = curve;
+  const bg = c.createGain();
+  const peak = (off ? 0.07 : down ? 0.26 : 0.17) * (0.5 + 0.5 * k);
+  const life = off ? 0.09 : down ? 0.32 : 0.2;
+  bg.gain.setValueAtTime(0.0001, t);
+  bg.gain.exponentialRampToValueAtTime(peak, t + 0.006);
+  bg.gain.exponentialRampToValueAtTime(0.0001, t + life);
+  body.connect(drive).connect(bg).connect(dry);
   const toVerb = c.createGain();
-  toVerb.gain.value = 0.35;
-  g.connect(toVerb).connect(send);
-  n.start(t);
-  const thump = c.createOscillator();
-  thump.frequency.setValueAtTime(90, t);
-  thump.frequency.exponentialRampToValueAtTime(40, t + 0.12);
-  const tg = c.createGain();
-  tg.gain.setValueAtTime(0.0001, t);
-  tg.gain.exponentialRampToValueAtTime(0.07 * k, t + 0.01);
-  tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
-  thump.connect(tg).connect(dry);
-  thump.start(t);
-  thump.stop(t + 0.16);
+  toVerb.gain.value = down ? 0.25 : 0.12;
+  bg.connect(toVerb).connect(send);
+  body.start(t);
+  body.stop(t + life + 0.05);
+  // Transient: a short bright click so it cuts through, brighter when hit harder.
+  const click = noise(0.05);
+  const hp = c.createBiquadFilter();
+  hp.type = off ? "bandpass" : "highpass";
+  hp.frequency.value = off ? 2600 : 1800 + 1600 * k;
+  hp.Q.value = off ? 2 : 0.7;
+  const cg = c.createGain();
+  cg.gain.setValueAtTime(0.0001, t);
+  cg.gain.exponentialRampToValueAtTime((off ? 0.05 : 0.07) * (0.4 + 0.6 * k), t + 0.003);
+  cg.gain.exponentialRampToValueAtTime(0.0001, t + (off ? 0.03 : 0.045));
+  click.connect(hp).connect(cg).connect(dry);
+  click.start(t);
 }
 
 /** A giant sheds a ring: a bright shimmer that spreads out. */

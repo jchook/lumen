@@ -24,7 +24,7 @@ import {
 } from "../sim3";
 import { botTurn, type Memories } from "../sim3/bots";
 import { createBloom } from "./bloom";
-import { soundAbsorb, soundBell, soundBurn, soundFlare, soundInit, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundThreat } from "./sound";
+import { soundAbsorb, soundBeat, soundBell, soundBurn, soundFlare, soundInit, soundLost, soundMute, soundMuted, soundPrize, soundReset, soundThreat } from "./sound";
 
 // ---------- config + persistence ----------
 
@@ -173,6 +173,7 @@ function reset(newSeed: number): void {
   endEl.classList.remove("on");
   eaten.clear();
   const key = soundReset(seed);
+  cfg.burnGrid = soundBeat() / 4;
   writeUrl();
   say(`seed ${seed} · ${cfg.players - 1} rivals · in ${key}`);
 }
@@ -1079,6 +1080,7 @@ $("reset").addEventListener("click", () => {
 });
 writeUrl();
 say(`seed ${seed} · ${cfg.players - 1} rivals · in ${soundReset(seed)}`);
+cfg.burnGrid = soundBeat() / 4;
 
 // Debug hook for headless checks.
 (window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg };

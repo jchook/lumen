@@ -3,7 +3,7 @@ import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbi
 import { STYLES, botTurn, decide } from "./bots";
 
 const cfg: Config = { ...defaultConfig, roundSeconds: 0, prizeEvery: 0, flareEvery: 0 };
-const empty = (seed = 1): State => ({ seed, rng: () => 0.5, time: 0, status: "playing", nextId: 1, bodies: [] });
+const empty = (seed = 1): State => ({ seed, rng: () => 0.5, time: 0, onGrid: true, status: "playing", nextId: 1, bodies: [] });
 const add = (s: State, kind: "orb" | "light", x: number, y: number, mass: number, extra: Partial<State["bodies"][number]> = {}) => {
   const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, queue: [], spent: 0, trait: "rival" as const, prize: false, ...extra };
   s.bodies.push(b);
@@ -440,5 +440,29 @@ describe("queued goals", () => {
     queueGoal(s, me.id, { x: 900, y: 500, follow: 0 });
     setGoal(s, me.id, { x: 300, y: 500, follow: 0 });
     expect(me.queue.length).toBe(0);
+  });
+});
+
+describe("burn grid", () => {
+  test("with a grid, burns only land on grid lines", () => {
+    const c = { ...cfg, burnGrid: 0.25, burnCooldown: 0.01 };
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    let burns = 0;
+    for (let i = 0; i < 60; i++) {
+      if (burn(s, me.id, 1, 0, 1, c)) burns++;
+      step(s, c, 1 / 60);
+    }
+    // One second at 1/60: four grid crossings plus the first step.
+    expect(burns).toBeGreaterThanOrEqual(4);
+    expect(burns).toBeLessThanOrEqual(5);
+  });
+  test("the autopilot keeps working on a grid", () => {
+    const c = { ...cfg, burnGrid: 0.23 };
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    setGoal(s, me.id, { x: 900, y: 500, follow: 0 });
+    const ev = run(s, 10, c);
+    expect(ev.some((e) => e.type === "arrive")).toBe(true);
   });
 });
