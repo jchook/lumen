@@ -4,6 +4,7 @@ import {
   defaultConfig,
   attracts,
   plan,
+  queueGoal,
   setGoal,
   delta,
   dist,
@@ -291,7 +292,7 @@ function burnToward(): void {
   if (burn(state, me.id, dx, dy, d / BURN_RANGE, cfg, ev)) onEvents(ev);
 }
 
-function tap(): void {
+function tap(queue: boolean): void {
   const me = human(state);
   if (!me.alive || state.status !== "playing") return;
   if (manual.checked) {
@@ -299,9 +300,11 @@ function tap(): void {
     return;
   }
   const g = goalAtCursor(me);
-  setGoal(state, me.id, g);
+  if (queue) queueGoal(state, me.id, g);
+  else setGoal(state, me.id, g);
   const t = g.follow ? state.bodies.find((b) => b.id === g.follow) : null;
-  say(g.orbit ? `orbit a ${t?.mass.toFixed(0)} at ${g.orbit.toFixed(0)}` : t ? `→ ${t.kind === "light" ? t.name : `${t.mass.toFixed(1)}-lumen orb`}` : "→ point");
+  const what = g.orbit ? `orbit a ${t?.mass.toFixed(0)} at ${g.orbit.toFixed(0)}` : t ? `→ ${t.kind === "light" ? t.name : `${t.mass.toFixed(1)}-lumen orb`}` : "→ point";
+  say(queue && me.queue.length ? `then ${what}` : what);
 }
 
 canvas.addEventListener("pointermove", (e) => {
@@ -333,7 +336,7 @@ canvas.addEventListener("pointerdown", (e) => {
     reset(seed + 1);
     return;
   }
-  tap();
+  tap(e.shiftKey);
 });
 window.addEventListener("pointerup", () => (pointer.down = false));
 window.addEventListener("keydown", (e) => {
@@ -618,6 +621,38 @@ function drawWorld(dt: number): void {
         drawPoints(me, p.path, p.arrives ? `hsla(${identity(me)} / 0.85)` : "hsla(0 0% 100% / 0.3)", 1.5, [6, 4]);
       }
     }
+  }
+  // Queued destinations: a chain from the current goal onward.
+  if (me.alive && me.goal && me.queue.length) {
+    const spot = (g: Goal): [number, number] => {
+      const t = g.follow ? state.bodies.find((b) => b.id === g.follow) : null;
+      return toScreen(t ? t.x : g.x, t ? t.y : g.y);
+    };
+    let [px, py] = spot(me.goal);
+    ctx.strokeStyle = `hsla(${identity(me)} / 0.35)`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 6]);
+    me.queue.forEach((g, i) => {
+      const [x, y] = spot(g);
+      ctx.beginPath();
+      if (Math.abs(x - px) < W / 2 && Math.abs(y - py) < H / 2) {
+        ctx.moveTo(px, py);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = `hsla(${identity(me)} / 0.7)`;
+      ctx.font = "10px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(String(i + 2), x, y - 9);
+      ctx.setLineDash([2, 6]);
+      px = x;
+      py = y;
+    });
+    ctx.setLineDash([]);
   }
   // The current destination and the leash to it.
   if (me.alive && me.goal) {

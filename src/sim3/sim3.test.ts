@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, pantryScore, plan, predict, radiusOf, setGoal, step, type Config, type State } from "./index";
+import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, pantryScore, plan, predict, queueGoal, radiusOf, setGoal, step, type Config, type State } from "./index";
 import { STYLES, botTurn, decide } from "./bots";
 
 const cfg: Config = { ...defaultConfig, roundSeconds: 0, prizeEvery: 0, flareEvery: 0 };
 const empty = (seed = 1): State => ({ seed, rng: () => 0.5, time: 0, status: "playing", nextId: 1, bodies: [] });
 const add = (s: State, kind: "orb" | "light", x: number, y: number, mass: number, extra: Partial<State["bodies"][number]> = {}) => {
-  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, spent: 0, trait: "rival" as const, prize: false, ...extra };
+  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, queue: [], spent: 0, trait: "rival" as const, prize: false, ...extra };
   s.bodies.push(b);
   return b;
 };
@@ -307,7 +307,7 @@ describe("autopilot", () => {
     setGoal(s, me.id, { x: 0, y: 0, follow: food.id });
     run(s, 10);
     expect(food.alive).toBe(false);
-    expect(me.mass).toBeGreaterThan(10 - me.spent + 1.5);
+    expect(me.mass).toBeGreaterThan(10.5); // ate 2, paid well under 1.5 to get there
   });
   test("drops a goal that becomes heavier than it", () => {
     const s = empty();
@@ -415,5 +415,30 @@ describe("traits", () => {
     const prey = add(h, "light", 650, 500, 3, { name: "You" });
     decide(h, hunter.id, cfg, STYLES.hunter);
     expect(hunter.goal?.follow).toBe(prey.id);
+  });
+});
+
+describe("queued goals", () => {
+  test("takes up the next goal after arriving, and after eating", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    const food = add(s, "orb", 900, 500, 2);
+    setGoal(s, me.id, { x: 700, y: 500, follow: 0 });
+    queueGoal(s, me.id, { x: 0, y: 0, follow: food.id });
+    queueGoal(s, me.id, { x: 900, y: 800, follow: 0 });
+    expect(me.queue.length).toBe(2);
+    const ev = run(s, 20);
+    expect(ev.filter((e) => e.type === "arrive").length).toBe(2);
+    expect(food.alive).toBe(false);
+    expect(me.goal).toBeNull();
+    expect(me.queue.length).toBe(0);
+  });
+  test("a plain tap drops the queue", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    setGoal(s, me.id, { x: 700, y: 500, follow: 0 });
+    queueGoal(s, me.id, { x: 900, y: 500, follow: 0 });
+    setGoal(s, me.id, { x: 300, y: 500, follow: 0 });
+    expect(me.queue.length).toBe(0);
   });
 });

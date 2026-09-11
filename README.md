@@ -158,6 +158,9 @@ are behind a toggle in the tuning panel.
 being the last light ends it early. The sky is in the URL (`#s=<seed>&r=<rivals>`), so a link is a
 challenge: same board, same rivals, beat the score.
 
+**Queues.** Shift-tap adds a destination after the current one: a point, a body to chase, in any
+order. The chain is drawn and numbered. A plain tap replaces the whole plan; space drops it.
+
 **Orbits.** Tap anything that pulls and could eat you and your light enters orbit at its current
 distance, then holds it. Faint lanes ring every attractor. Orbits are the safe harbours and the
 highways; getting into one is a maneuver you plan and pay for.

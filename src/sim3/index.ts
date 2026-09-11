@@ -36,6 +36,8 @@ export interface Body {
   cooldown: number;
   /** Where this light is steering itself, if anywhere. */
   goal: Goal | null;
+  /** Goals to take up, in order, when the current one is done. */
+  queue: Goal[];
   /** Mass burned on the current goal. */
   spent: number;
   /** Bot temperament; lights only. */
@@ -259,6 +261,7 @@ function makeBody(s: State, kind: Kind, x: number, y: number, mass: number, extr
     from: 0,
     cooldown: 0,
     goal: null,
+    queue: [],
     spent: 0,
     trait: "rival",
     prize: false,
@@ -515,11 +518,29 @@ export function steerOrbit(b: Mover, tx: number, ty: number, tvx: number, tvy: n
   return { dx: ex, dy: ey, strength: Math.min(1, e / full) };
 }
 
-/** Point a light somewhere, or at something. Null clears it. */
+/** Point a light somewhere, or at something. Null clears it. Drops anything queued. */
 export function setGoal(s: State, id: number, goal: Goal | null): void {
   const b = byId(s, id);
   if (!b || b.kind !== "light") return;
   b.goal = goal;
+  b.queue = [];
+  b.spent = 0;
+}
+
+/** Add a goal after the current one. An orbit never ends on its own, so it always replaces. */
+export function queueGoal(s: State, id: number, goal: Goal): void {
+  const b = byId(s, id);
+  if (!b || b.kind !== "light") return;
+  if (!b.goal || b.goal.orbit) {
+    setGoal(s, id, goal);
+    return;
+  }
+  b.queue.push(goal);
+}
+
+/** Take up the next queued goal, if any. */
+function advance(b: Body): void {
+  b.goal = b.queue.shift() ?? null;
   b.spent = 0;
 }
 
@@ -543,12 +564,12 @@ function pilot(s: State, cfg: Config, ev: Ev[]): void {
     if (b.kind !== "light" || !b.alive || !b.goal) continue;
     const t = resolveGoal(s, b, cfg);
     if (!t) {
-      b.goal = null;
+      advance(b);
       continue;
     }
     const d = dist(b, t, cfg);
     if (!b.goal.follow && d <= t.reach) {
-      b.goal = null;
+      advance(b);
       ev.push({ type: "arrive", id: b.id });
       continue;
     }
