@@ -1,11 +1,11 @@
 /**
  * The sky's own song, generated. No assets.
  *
- * Each sky picks a key and a mode from its seed. A slow progression of diatonic chords drives a
- * soft pad and a bass that wanders the scale, mostly by step, landing on chord tones. Meals play a
- * synth lead: a note from the current chord and scale in a register set by the mass, and a streak
- * of meals walks the melody up the scale. Threat is a beating pair on the key's root and a band of
- * wind. Burns are air. Prizes and the round bell ring in key. So the game plays the tune.
+ * Each sky picks a key, a mode, a tempo and a bass style from its seed. A slow progression of
+ * diatonic chords drives a tape-style pad and a bass that wanders the scale in its own rhythm.
+ * Meals play a synth lead from a Markov chain of trance motifs. Threat is an arrangement change: a
+ * dissonant tone creeps into the pad and a low pulse on the root tightens on the eighths. Burns are
+ * the drum kit, on the grid. Prizes and the round bell ring in key. So the game plays the tune.
  *
  *   master ─ compressor ─ out
  *     ├─ dry
@@ -38,7 +38,35 @@ const song = {
   chord: 0, // scale degree the current chord is built on
   bpm: 66,
   seed: 1,
+  bass: "throb" as BassStyle,
 };
+
+/**
+ * Bass styles. `pattern` is which eighths of a four-beat bar it plays (1 = hit, 2 = accent).
+ *   throb: long, round, on the beat.
+ *   slap:  short, plucky, tresillo rhythm, a little chorus.
+ *   pulse: off-beat eighths, tight and driven: the trance engine.
+ */
+type BassStyle = "throb" | "slap" | "pulse";
+const BASS_STYLES: BassStyle[] = ["throb", "slap", "pulse"];
+const BASS: Record<BassStyle, { pattern: number[]; wave: OscillatorType; cutoff: number; q: number; env: number; decay: number; drive: number; sub: number; chorus: number; gain: number }> = {
+  throb: { pattern: [2, 0, 0, 0, 1, 0, 0, 0], wave: "triangle", cutoff: 300, q: 0.8, env: 500, decay: 0.55, drive: 1.6, sub: 0.6, chorus: 0, gain: 0.16 },
+  slap: { pattern: [2, 0, 0, 1, 0, 0, 1, 0], wave: "sawtooth", cutoff: 220, q: 4, env: 1400, decay: 0.16, drive: 2.4, sub: 0.35, chorus: 7, gain: 0.13 },
+  pulse: { pattern: [0, 1, 0, 1, 0, 1, 0, 2], wave: "square", cutoff: 260, q: 2.5, env: 900, decay: 0.12, drive: 3.0, sub: 0.45, chorus: 0, gain: 0.12 },
+};
+
+function applyBassStyle(): void {
+  if (!bassFilter || !bassDrive) return;
+  const st = BASS[song.bass];
+  bassFilter.frequency.value = st.cutoff;
+  bassFilter.Q.value = st.q;
+  const curve = new Float32Array(512);
+  for (let i = 0; i < 512; i++) {
+    const x = (i / 511) * 2 - 1;
+    curve[i] = Math.tanh(x * st.drive) / Math.tanh(st.drive);
+  }
+  bassDrive.curve = curve;
+}
 const beat = (): number => 60 / song.bpm;
 
 function hash(n: number): () => number {
@@ -60,11 +88,12 @@ export function soundKey(seed: number): string {
   const names = Object.keys(MODES);
   song.modeName = names[Math.floor(r() * names.length)]!;
   song.mode = MODES[song.modeName]!;
-  song.bpm = 58 + Math.floor(r() * 16);
+  song.bpm = 56 + Math.floor(r() * 30);
+  song.bass = BASS_STYLES[Math.floor(r() * BASS_STYLES.length)]!;
   song.chord = 0;
   lead.motif = Math.floor(r() * MOTIFS.length);
   lead.i = 0;
-  return `${NOTE_NAMES[song.root]} ${song.modeName}`;
+  return `${NOTE_NAMES[song.root]} ${song.modeName} · ${song.bpm} bpm · ${song.bass} bass`;
 }
 
 /** Frequency of scale degree `deg` (any integer; 7 per octave) in octave `oct` (C4 = 261.6 is oct 4). */
@@ -110,11 +139,9 @@ let wobble: GainNode | null = null;
 let flutter: GainNode | null = null;
 let padVoices: Array<{ o: OscillatorNode; g: GainNode }> = [];
 let bassFilter: BiquadFilterNode | null = null;
-let droneA: OscillatorNode | null = null;
-let droneB: OscillatorNode | null = null;
-let droneGain: GainNode | null = null;
-let windGain: GainNode | null = null;
-let windFilter: BiquadFilterNode | null = null;
+let bassDrive: WaveShaperNode | null = null;
+let bassBus: GainNode | null = null;
+let tension: { o: OscillatorNode; g: GainNode } | null = null;
 let leadDelay: DelayNode | null = null;
 let leadBus: GainNode | null = null;
 
@@ -186,23 +213,25 @@ export function soundInit(): void {
     flutter.gain.value = 2.5; // cents
     flt.connect(flutter);
     flt.start();
-    // Tape hiss.
-    const hiss = noise(3);
-    hiss.loop = true;
-    const hissHp = c.createBiquadFilter();
-    hissHp.type = "highpass";
-    hissHp.frequency.value = 3200;
-    const hissG = c.createGain();
-    hissG.gain.value = 0.0045;
-    hiss.connect(hissHp).connect(hissG).connect(dry);
-    hiss.start();
-
-    // Bass tone shaping.
+    // Bass chain: filter → drive → bus. The style sets the numbers.
     bassFilter = c.createBiquadFilter();
     bassFilter.type = "lowpass";
     bassFilter.frequency.value = 380;
     bassFilter.Q.value = 1.1;
-    bassFilter.connect(dry);
+    bassDrive = c.createWaveShaper();
+    bassBus = c.createGain();
+    bassBus.gain.value = 1;
+    bassFilter.connect(bassDrive).connect(bassBus).connect(dry);
+    applyBassStyle();
+    // Tension: a tone a step above the chord root, silent until something can eat you.
+    const to = c.createOscillator();
+    to.type = "triangle";
+    to.frequency.value = freq(1, 4);
+    const tg = c.createGain();
+    tg.gain.value = 0;
+    to.connect(tg).connect(padFilter);
+    to.start();
+    tension = { o: to, g: tg };
 
     // Lead: through a dotted-eighth delay so single notes become phrases.
     leadBus = c.createGain();
@@ -225,46 +254,10 @@ export function soundInit(): void {
     leadDelay.connect(wet).connect(dry);
     wet.connect(send);
 
-    // Threat: a beating pair on the root, and wind.
-    droneA = c.createOscillator();
-    droneA.type = "sawtooth";
-    droneB = c.createOscillator();
-    droneB.type = "sawtooth";
-    const droneFilter = c.createBiquadFilter();
-    droneFilter.type = "lowpass";
-    droneFilter.frequency.value = 170;
-    droneGain = c.createGain();
-    droneGain.gain.value = 0;
-    droneA.connect(droneFilter);
-    droneB.connect(droneFilter);
-    droneFilter.connect(droneGain).connect(dry);
-    droneA.start();
-    droneB.start();
-    const wind = noise(4);
-    wind.loop = true;
-    windFilter = c.createBiquadFilter();
-    windFilter.type = "bandpass";
-    windFilter.frequency.value = 300;
-    windFilter.Q.value = 0.8;
-    windGain = c.createGain();
-    windGain.gain.value = 0;
-    wind.connect(windFilter).connect(windGain);
-    windGain.connect(dry);
-    windGain.connect(send);
-    wind.start();
-
-    tuneDrone();
     startClock();
   } catch {
     ctx = null;
   }
-}
-
-function tuneDrone(): void {
-  if (!droneA || !droneB || !ctx) return;
-  const f = freq(0, 2);
-  droneA.frequency.setTargetAtTime(f, ctx.currentTime, 0.2);
-  droneB.frequency.setTargetAtTime(f + 1.5, ctx.currentTime, 0.2);
 }
 
 export function soundMute(on: boolean): void {
@@ -275,10 +268,12 @@ export const soundMuted = (): boolean => muted;
 
 // ---------- the clock: chords, pad, bass ----------
 
-let nextBeat = 0;
-let beatIndex = 0;
+let nextEighth = 0;
+let eighthIndex = 0;
 let clockTimer = 0;
 let clockStart = 0;
+let threat = 0; // 0..1, from soundThreat
+let ducked = 0; // same thing, as the pad sees it
 
 /** Seconds per beat of the current song. */
 export const soundBeat = (): number => beat();
@@ -288,53 +283,59 @@ function slotNow(): number {
   const six = beat() / 4;
   return ((Math.round((ctx.currentTime - clockStart) / six) % 16) + 16) % 16;
 }
-const bass = { degree: -7, rests: 0 };
-let ducked = 0; // threat level, closes the pad
+
+const bass = { degree: -7 };
 
 function startClock(): void {
   if (!ctx) return;
-  nextBeat = ctx.currentTime + 0.1;
-  clockStart = nextBeat;
-  beatIndex = 0;
-  playChord(nextBeat);
+  nextEighth = ctx.currentTime + 0.1;
+  clockStart = nextEighth;
+  eighthIndex = 0;
+  playChord(nextEighth);
   clearInterval(clockTimer);
-  clockTimer = window.setInterval(schedule, 90);
+  clockTimer = window.setInterval(schedule, 80);
 }
 
 function schedule(): void {
   if (!ctx) return;
-  while (nextBeat < ctx.currentTime + 0.35) {
-    const t = nextBeat;
-    const r = hash((song.seed * 31 + beatIndex * 17) >>> 0);
-    // Harmonic rhythm: a new chord every 8 beats, chosen by the table.
-    if (beatIndex > 0 && beatIndex % 8 === 0) {
+  const eighth = beat() / 2;
+  while (nextEighth < ctx.currentTime + 0.3) {
+    const t = nextEighth;
+    const i = eighthIndex;
+    const r = hash((song.seed * 31 + i * 17) >>> 0);
+    const inBar = i % 8;
+    // Harmonic rhythm: a new chord every two bars.
+    if (i > 0 && i % 16 === 0) {
       const options = NEXT[song.chord] ?? CHORDS;
       song.chord = options[Math.floor(r() * options.length)]!;
       playChord(t);
+      if (tension) tension.o.frequency.setTargetAtTime(freq(song.chord + 1, 4), t, 0.1);
     }
-    // Bass on beats 1 and 3, sometimes 4; it wanders by step and likes chord tones.
-    const on = beatIndex % 4 === 0 || beatIndex % 4 === 2 || (beatIndex % 4 === 3 && r() < 0.3);
-    if (on) {
+    // Bass: the style's pattern, wandering by step, fond of chord tones, home on the chord change.
+    const st = BASS[song.bass];
+    const hit = st.pattern[inBar]!;
+    if (hit) {
       const roll = r();
-      if (roll < 0.55) bass.degree += r() < 0.5 ? 1 : -1;
+      if (roll < 0.5) bass.degree += r() < 0.5 ? 1 : -1;
       else if (roll < 0.85) {
-        // Jump to the nearest chord tone.
         const tones = chordTones().map((d) => d - 7).sort((a, b) => Math.abs(a - bass.degree) - Math.abs(b - bass.degree));
         bass.degree = tones[0]!;
       }
       if (bass.degree < -10) bass.degree += 7;
       if (bass.degree > -2) bass.degree -= 7;
-      if (beatIndex % 8 === 0) bass.degree = song.chord - 7; // land on the root with the chord
-      playBass(freq(bass.degree, 4), t, beat() * (beatIndex % 4 === 0 ? 1.6 : 0.9));
+      if (i % 16 === 0) bass.degree = song.chord - 7;
+      playBass(freq(bass.degree, 4), t, eighth * (hit === 2 ? 1.6 : 1.0), hit === 2 ? 1 : 0.8);
     }
-    // The pump: duck on the beat, swell back before the next one.
-    if (padPump) {
+    // Threat: a low pulse on the root every eighth, harder as it gets closer.
+    if (threat > 0.12) playPulse(freq(0, 2), t, threat, inBar % 2 === 0);
+    // The pump, on each beat.
+    if (padPump && inBar % 2 === 0) {
       padPump.gain.cancelScheduledValues(t);
       padPump.gain.setValueAtTime(0.42, t);
       padPump.gain.linearRampToValueAtTime(1.0, t + beat() * 0.6);
     }
-    nextBeat += beat();
-    beatIndex++;
+    nextEighth += eighth;
+    eighthIndex++;
   }
 }
 
@@ -371,43 +372,70 @@ function playChord(t: number): void {
   }
 }
 
-function playBass(f: number, t: number, dur: number): void {
+function playBass(f: number, t: number, dur: number, accent: number): void {
+  if (!ctx || !bassFilter) return;
+  const c = ctx;
+  const st = BASS[song.bass];
+  // Per-note filter: opens on the hit, closes over the decay. That's the pluck.
+  const filt = c.createBiquadFilter();
+  filt.type = "lowpass";
+  filt.Q.value = st.q;
+  filt.frequency.setValueAtTime(st.cutoff + st.env * accent, t);
+  filt.frequency.exponentialRampToValueAtTime(st.cutoff, t + st.decay);
+  const g = c.createGain();
+  const peak = st.gain * accent;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
+  g.gain.setTargetAtTime(peak * 0.5, t + 0.03, st.decay * 0.6);
+  g.gain.setTargetAtTime(0.0001, t + dur, 0.06);
+  filt.connect(g).connect(bassFilter);
+  const voices: Array<[OscillatorType, number, number, number]> = [[st.wave, f / 2, 0, 1]];
+  if (st.chorus) voices.push([st.wave, f / 2, st.chorus, 0.6]);
+  if (st.sub) voices.push(["sine", f / 4, 0, st.sub]);
+  for (const [wave, fr, det, amp] of voices) {
+    const o = c.createOscillator();
+    o.type = wave;
+    o.frequency.value = fr;
+    o.detune.value = det;
+    const vg = c.createGain();
+    vg.gain.value = amp;
+    o.connect(vg).connect(filt);
+    o.start(t);
+    o.stop(t + dur + 0.6);
+  }
+}
+
+/** The threat pulse: a short, dark thud on the root, in the bass chain. */
+function playPulse(f: number, t: number, level: number, strong: boolean): void {
   if (!ctx || !bassFilter) return;
   const c = ctx;
   const o = c.createOscillator();
-  o.type = "triangle";
-  o.frequency.value = f / 2;
-  const o2 = c.createOscillator();
-  o2.type = "sine";
-  o2.frequency.value = f / 4;
+  o.type = "sine";
+  o.frequency.setValueAtTime(f * 1.5, t);
+  o.frequency.exponentialRampToValueAtTime(f, t + 0.05);
   const g = c.createGain();
+  const peak = (strong ? 0.14 : 0.08) * level * level;
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.16, t + 0.03);
-  g.gain.setTargetAtTime(0.09, t + 0.1, 0.25);
-  g.gain.setTargetAtTime(0.0001, t + dur, 0.12);
-  o.connect(g);
-  o2.connect(g);
-  g.connect(bassFilter);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+  o.connect(g).connect(bassFilter);
   o.start(t);
-  o2.start(t);
-  o.stop(t + dur + 0.8);
-  o2.stop(t + dur + 0.8);
+  o.stop(t + 0.15);
 }
 
 // ---------- threat ----------
 
-/** 0..1: how close the nearest thing that can eat me is. */
+/** 0..1: how close the nearest thing that can eat me is. Turns the arrangement, not a noise. */
 export function soundThreat(level: number): void {
-  if (!ctx || !droneGain || !windGain || !windFilter || !droneB || !padFilter) return;
+  if (!ctx || !padFilter) return;
   const t = ctx.currentTime;
   const k = Math.min(1, Math.max(0, level));
+  threat = k;
   ducked = k;
-  droneGain.gain.setTargetAtTime(k * k * 0.13, t, 0.25);
-  droneB.frequency.setTargetAtTime(freq(0, 2) + 1.5 + k * 4, t, 0.3);
-  windGain.gain.setTargetAtTime(k * 0.08, t, 0.3);
-  windFilter.frequency.setTargetAtTime(300 + k * 900, t, 0.3);
-  padFilter.frequency.setTargetAtTime(1100 - k * 700, t, 0.5);
-  for (const v of padVoices) v.g.gain.setTargetAtTime(0.028 * (1 - k * 0.6), t, 0.5);
+  // The pad darkens and thins; the tension tone creeps in a step above the root.
+  padFilter.frequency.setTargetAtTime(1100 - k * 750, t, 0.5);
+  for (const v of padVoices) v.g.gain.setTargetAtTime(0.028 * (1 - k * 0.5), t, 0.5);
+  if (tension) tension.g.gain.setTargetAtTime(k * k * 0.06, t, 0.4);
 }
 
 // ---------- lead: meals play the melody ----------
@@ -652,7 +680,6 @@ export function soundReset(seed: number): string {
   if (ctx && padFilter) {
     padFilter.frequency.setTargetAtTime(1100, ctx.currentTime, 0.8);
     if (leadDelay) leadDelay.delayTime.setTargetAtTime(beat() * 0.75, ctx.currentTime, 0.2);
-    tuneDrone();
     startClock();
   }
   return name;

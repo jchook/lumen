@@ -1,8 +1,8 @@
 :root {
   color-scheme: dark;
-  --ink: #ebdbb2;
-  --dim: #928374;
-  --panel: rgba(29, 32, 33, 0.88);
+  --ink: #fbf1c7;
+  --dim: #a89984;
+  --panel: rgba(16, 17, 18, 0.9);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
@@ -14,7 +14,7 @@ html,
 body {
   margin: 0;
   height: 100%;
-  background: #1d2021;
+  background: #101112;
   color: var(--ink);
   overflow: hidden;
   touch-action: none;

@@ -389,8 +389,8 @@ const GB = {
   blue: "157 16% 58%",
   orange: "27 99% 55%",
   red: "6 96% 59%",
-  cream: "43 59% 81%",
-  gray: "30 12% 51%",
+  cream: "48 87% 88%",
+  gray: "36 13% 62%",
 };
 const PALETTE = [GB.aqua, GB.purple, GB.yellow, GB.green, GB.blue, GB.orange, GB.red, GB.cream];
 /** A light's identity colour. */
@@ -489,21 +489,21 @@ function onEvents(ev: Ev[]): void {
 const STARS = Array.from({ length: 260 }, (_, i) => ({ x: ((i * 7919) % 2400) / 2400, y: ((i * 104729) % 2400) / 2400, s: 0.4 + ((i * 31) % 10) / 12 }));
 
 function drawBackground(): void {
-  ctx.fillStyle = "#1d2021";
+  ctx.fillStyle = "#101112";
   ctx.fillRect(-2, -2, W + 4, H + 4);
   // Parallax starfield tiled on the torus at half the camera motion.
   const z = zoom();
   const tile = Math.min(cfg.width, cfg.height) * z;
   const ox = ((-cam.x * 0.5 * z) % tile + tile) % tile;
   const oy = ((-cam.y * 0.5 * z) % tile + tile) % tile;
-  ctx.fillStyle = "rgba(235, 219, 178, 0.55)";
+  ctx.fillStyle = "rgba(251, 241, 199, 0.5)";
   for (let ty = -1; ty <= Math.ceil(H / tile); ty++) {
     for (let tx = -1; tx <= Math.ceil(W / tile); tx++) {
       for (const st of STARS) {
         const x = ox + (tx + st.x) * tile;
         const y = oy + (ty + st.y) * tile;
         if (x < -2 || y < -2 || x > W + 2 || y > H + 2) continue;
-        ctx.globalAlpha = 0.25 + st.s * 0.4;
+        ctx.globalAlpha = 0.18 + st.s * 0.35;
         ctx.fillRect(x, y, st.s, st.s);
       }
     }
@@ -933,9 +933,9 @@ function drawMinimap(me: Body): void {
   const x0 = W - size - pad;
   const y0 = H - size - pad;
   const k = size / cfg.width;
-  ctx.fillStyle = "rgba(29, 32, 33, 0.75)";
+  ctx.fillStyle = "rgba(16, 17, 18, 0.8)";
   ctx.fillRect(x0, y0, size, size);
-  ctx.strokeStyle = "rgba(146, 131, 116, 0.35)";
+  ctx.strokeStyle = "rgba(168, 153, 132, 0.4)";
   ctx.lineWidth = 1;
   ctx.strokeRect(x0 + 0.5, y0 + 0.5, size - 1, size - 1);
   // Centre the map on me so the view never straddles the seam.
