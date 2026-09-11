@@ -192,8 +192,12 @@ from the date that everyone shares (D also jumps to it). The site is installable
 icons, and a network-first service worker so it opens full screen from a phone home screen and
 still runs offline.
 
-**Sound and glow.** Web Audio, no assets: a tone on absorb that drops with the mass, a thump on
-burn, a hum that swells near anything that can eat you, a chime for a prize, a bell for the round.
+**Sound and glow.** Web Audio, no assets. A generative song in a key and mode picked from the seed:
+pad, mono bass, drum bed with swing. Meals play the lead, and the size of the meal is the size of
+the phrase: a note under 4 lumens, a three-note run to 12, a five-note run with a long held note on
+the whammy bar to 40, and the whole phrase above that, with the bass stepping back to make room.
+A rival is the full lick. Burns are the kit, a tension tone creeps in near anything that can eat
+you, a chime for a prize, a bell for the round, and a tape stop when you are taken.
 M or the ♪ button top right mutes; ↻ beside it starts a new sky. On phones the first tap unlocks audio and a looping silent track lifts the iOS silent switch. Bloom is a WebGL post-process over the Canvas2D scene (`src/web3/bloom.ts`), toggled in the
 tuning panel.
 

@@ -311,7 +311,7 @@ export function soundInit(): void {
     bassDuck = c.createGain();
     bassDuck.gain.value = 1;
     bassBus = c.createGain();
-    bassBus.gain.value = 1;
+    bassBus.gain.value = 0.82;
     vca.connect(bassDrive).connect(bassTone).connect(bassDuck).connect(bassBus).connect(comp);
     const vcf = c.createBiquadFilter();
     vcf.type = "lowpass";
@@ -356,7 +356,7 @@ export function soundInit(): void {
 
     // Lead: through a dotted-eighth delay so single notes become phrases. Ducked with the pad.
     leadBus = c.createGain();
-    leadBus.gain.value = 0.85;
+    leadBus.gain.value = 1.15;
     leadBus.connect(duck);
     const toVerb = c.createGain();
     toVerb.gain.value = 0.5;
@@ -822,7 +822,18 @@ function nextMotif(): void {
 }
 
 /** The lead voice: square + detuned saw + sub sine through a plucked filter and light drive. */
-function leadVoice(f: number, t: number, dur: number, peak: number, opts: { bright?: number; glideFrom?: number; vibrato?: number; short?: boolean } = {}): void {
+/**
+ * The lead voice. `vibrato` is cents of wobble on a held note; `wide` lets it keep widening over
+ * the hold; `scoop` bends up into the note from that many cents below; `dive` drops the pitch by
+ * that many cents as the note ends. Scoop, wide and dive together are the whammy bar.
+ */
+function leadVoice(
+  f: number,
+  t: number,
+  dur: number,
+  peak: number,
+  opts: { bright?: number; glideFrom?: number; vibrato?: number; short?: boolean; scoop?: number; dive?: number; wide?: boolean } = {},
+): void {
   if (!ctx || !leadBus) return;
   const c = ctx;
   const bright = opts.bright ?? 1;
@@ -853,13 +864,29 @@ function leadVoice(f: number, t: number, dur: number, peak: number, opts: { brig
   let vibG: GainNode | null = null;
   if (opts.vibrato) {
     vib = c.createOscillator();
-    vib.frequency.value = 5.5;
+    vib.frequency.setValueAtTime(opts.wide ? 4.6 : 5.5, t);
+    if (opts.wide) vib.frequency.linearRampToValueAtTime(6.2, t + dur);
     vibG = c.createGain();
     vibG.gain.setValueAtTime(0, t);
     vibG.gain.linearRampToValueAtTime(opts.vibrato, t + 0.35);
+    if (opts.wide) vibG.gain.linearRampToValueAtTime(opts.vibrato * 2.2, t + dur);
     vib.connect(vibG);
     vib.start(t);
     vib.stop(t + dur + 0.9);
+  }
+  // The bar: one pitch offset shared by every layer, scooped up at the start, dived at the end.
+  let bend: ConstantSourceNode | null = null;
+  if (opts.scoop || opts.dive) {
+    bend = c.createConstantSource();
+    bend.offset.setValueAtTime(-(opts.scoop ?? 0), t);
+    bend.offset.linearRampToValueAtTime(0, t + Math.min(0.18, dur * 0.3));
+    if (opts.dive) {
+      const from = t + Math.max(0.05, dur - Math.min(0.5, dur * 0.35));
+      bend.offset.setValueAtTime(0, from);
+      bend.offset.linearRampToValueAtTime(-opts.dive, t + dur + 0.1);
+    }
+    bend.start(t);
+    bend.stop(t + dur + 0.9);
   }
   for (const [type, fr, det, amp] of layers) {
     const o = c.createOscillator();
@@ -870,6 +897,7 @@ function leadVoice(f: number, t: number, dur: number, peak: number, opts: { brig
     } else o.frequency.value = fr;
     o.detune.value = det;
     if (vibG) vibG.connect(o.detune);
+    if (bend) bend.connect(o.detune);
     const lg = c.createGain();
     lg.gain.value = amp;
     o.connect(lg).connect(filt);
@@ -878,30 +906,62 @@ function leadVoice(f: number, t: number, dur: number, peak: number, opts: { brig
   }
 }
 
+/** The bass steps back for `seconds` so a lick owns the middle of the mix, then eases back in. */
+function room(t: number, seconds: number, depth = 0.45): void {
+  if (!bassBus || !ctx) return;
+  hold(bassBus.gain, t);
+  bassBus.gain.setTargetAtTime(depth, t, 0.04);
+  bassBus.gain.setTargetAtTime(0.82, t + seconds, 0.5);
+}
+
 /**
  * A short run that lands on `deg`: an approach from below by scale steps, each note gliding into
  * the next, the last held. `steps` is the approach length. Partial licks for the bigger meals.
+ * `last` shapes the held note: vibrato, whether it widens, the scoop into it, the dive out of it.
  */
-function miniLick(deg: number, oct: number, steps: number, holdSec: number, peak: number, vibrato: number): void {
-  if (!ctx) return;
+function miniLick(deg: number, oct: number, steps: number, holdSec: number, peak: number, last: { vibrato?: number; wide?: boolean; scoop?: number; dive?: number } = {}): number {
+  if (!ctx) return 0;
   const t0 = ctx.currentTime;
   const six = beat() / 4;
   const approach = [-7, -5, -4, -2, -1].slice(-steps);
   const run = [...approach, 0];
   run.forEach((rel, i) => {
     const t = t0 + i * six * 0.5;
-    const last = i === run.length - 1;
-    leadVoice(freq(deg + rel, oct), t, last ? holdSec : six * 0.55, last ? peak : peak * 0.8, { bright: 1.2, glideFrom: i > 0 ? 0.95 : undefined, vibrato: last ? vibrato : 0 });
+    const end = i === run.length - 1;
+    leadVoice(freq(deg + rel, oct), t, end ? holdSec : six * 0.55, end ? peak : peak * 0.8, { bright: 1.2, glideFrom: i > 0 ? 0.95 : undefined, ...(end ? last : {}) });
   });
+  return (run.length - 1) * six * 0.5 + holdSec;
+}
+
+/**
+ * The big-meal phrase: a five-note run up to the note, a quick turn around it, then the octave
+ * above held long with a scoop in, a widening vibrato, and a dive out. The delay carries the tail.
+ */
+function bigLick(deg: number, oct: number, peak: number): number {
+  if (!ctx) return 0;
+  const t0 = ctx.currentTime;
+  const six = beat() / 4;
+  const phrase: Array<[number, number]> = [[-7, 0.5], [-5, 0.5], [-4, 0.5], [-2, 0.5], [-1, 0.5], [0, 1], [2, 0.5], [0, 0.5], [-1, 0.5], [0, 0.5], [4, 0.5]];
+  let at = 0;
+  phrase.forEach(([rel, len], i) => {
+    const t = t0 + at * six;
+    leadVoice(freq(deg + rel, oct), t, six * len * 1.1, peak * 0.85, { bright: 1.25, glideFrom: i > 0 && i % 2 === 0 ? 0.95 : undefined });
+    at += len;
+  });
+  const hold = 2.6;
+  leadVoice(freq(deg + 7, oct), t0 + at * six, hold, peak, { bright: 1.3, vibrato: 26, wide: true, scoop: 220, dive: 1100 });
+  return at * six + hold;
 }
 
 /**
  * One meal, one note of the current motif. Small meals are the melody itself, note for note.
  * Bigger meals arrive with a run-up that lands on that same note, longer as the meal grows, so
  * the phrase stays in the song and the size is still heard:
- *   speck, morsel (< 4):  the note.
- *   meal   (4–12):        a three-note run into the note.
- *   prize  (12+):         a five-note run, the note held with vibrato, and a sub thump.
+ *   speck, morsel (< 4):  the note, with a small scoop into it.
+ *   meal   (4–12):        a three-note run into the note, held with vibrato.
+ *   prize  (12–40):       a five-note run, the note held long with a widening vibrato and a dive,
+ *                         the bass stepping back, and a sub thump.
+ *   feast  (40+):         the whole phrase: run, turn, and the octave held on the bar.
  */
 export function soundAbsorb(mass: number): void {
   if (!ctx || !leadBus) return;
@@ -916,14 +976,15 @@ export function soundAbsorb(mass: number): void {
   const deg = song.chord + rel;
   const t = now;
   if (mass < 4) {
-    leadVoice(freq(deg, 3), t, 0.45 + mass * 0.06, 0.08 + mass * 0.005, {});
+    leadVoice(freq(deg, 3), t, 0.5 + mass * 0.07, 0.09 + mass * 0.006, { scoop: 40, vibrato: mass > 2 ? 8 : 0 });
     return;
   }
   if (mass < 12) {
-    miniLick(deg, 3, 3, 0.9, 0.11, 0);
+    miniLick(deg, 3, 3, 1.2, 0.12, { vibrato: 14, scoop: 70 });
     return;
   }
-  miniLick(deg, 3, 5, 1.6, 0.13, 22);
+  const len = mass < 40 ? miniLick(deg, 3, 5, 2.0, 0.14, { vibrato: 24, wide: true, scoop: 140, dive: 600 }) : bigLick(deg, 3, 0.15);
+  room(t, len);
   if (dry) {
     const sub = c.createOscillator();
     sub.type = "sine";
@@ -956,8 +1017,9 @@ export function soundLick(): void {
     const f = freq(song.chord + rel, 2);
     const last = i === run.length - 1;
     const glideFrom = i > 0 && i % 3 === 0 ? 0.94 : undefined;
-    leadVoice(f, t, last ? 2.4 : six * 0.55, last ? 0.16 : 0.12, { bright: 1.25, glideFrom, vibrato: last ? 28 : 0 });
+    leadVoice(f, t, last ? 3.2 : six * 0.55, last ? 0.17 : 0.12, { bright: 1.25, glideFrom, ...(last ? { vibrato: 30, wide: true, scoop: 260, dive: 1400 } : {}) });
   });
+  room(t0, run.length * six * 0.5 + 3.2, 0.35);
   // Under it: the sidechain stays open, the pad lifts, and a long open hat washes over.
   if (duck) {
     hold(duck.gain, t0);
@@ -1247,6 +1309,10 @@ export function soundReset(seed: number): string {
   arc.t = 0;
   arc.section = "intro";
   arc.riser = false;
+  if (bassBus && ctx) {
+    hold(bassBus.gain, ctx.currentTime);
+    bassBus.gain.setTargetAtTime(0.82, ctx.currentTime, 0.2);
+  }
   if (ctx && padFilter) {
     const t = ctx.currentTime;
     if (songGain) {

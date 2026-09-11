@@ -1470,7 +1470,7 @@ say(`seed ${seed} · ${cfg.players - 1} rivals · in ${soundReset(seed)}`);
 cfg.burnGrid = soundBeat() / 4 >= cfg.burnCooldown ? soundBeat() / 4 : soundBeat() / 2;
 
 // Debug hook for headless checks.
-(window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg, audio: soundState, section: soundSection };
+(window as unknown as { __lumen: unknown }).__lumen = { cam, get state() { return state; }, cfg, audio: soundState, section: soundSection, absorb: soundAbsorb, lick: soundLick };
 
 // A link to a sky (the end screen's, or a shared one) changes the hash: follow it.
 window.addEventListener("hashchange", () => {
