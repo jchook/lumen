@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, plan, predict, radiusOf, setGoal, step, type Config, type State } from "./index";
+import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, pantryScore, plan, predict, radiusOf, setGoal, step, type Config, type State } from "./index";
 import { botTurn, decide } from "./bots";
 
 const cfg: Config = { ...defaultConfig };
@@ -204,6 +204,19 @@ describe("setup", () => {
     expect(a.bodies.filter((x) => x.kind === "orb").length).toBe(cfg.orbs);
     const masses = a.bodies.filter((x) => x.kind === "orb").map((x) => x.mass);
     expect(masses.filter((m) => m < 2).length).toBeGreaterThan(masses.length / 3);
+  });
+  test("every light starts with the same pantry, and starts are about as rich", () => {
+    let worst = 0;
+    for (let seed = 1; seed <= 30; seed++) {
+      const s = newGame(seed, cfg);
+      for (const l of lights(s)) {
+        const near = s.bodies.filter((o) => o.kind === "orb" && o.mass < l.mass && dist(o, l, cfg) < 300);
+        expect(near.length).toBeGreaterThanOrEqual(cfg.pantry.length - 1);
+      }
+      const scores = lights(s).map((l) => pantryScore(s, l, cfg));
+      worst = Math.max(worst, Math.max(...scores) / Math.min(...scores));
+    }
+    expect(worst).toBeLessThan(cfg.fairness * 1.3);
   });
   test("nothing starts overlapping anything that could eat it", () => {
     for (const seed of [3, 4, 5]) {

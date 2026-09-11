@@ -59,6 +59,10 @@ export interface Config {
   giants: number;
   /** How many are middleweights (a fraction of a giant), the roaming hazards. */
   middleweights: number;
+  /** Every light starts with the same pantry: these orb masses, in close co-orbit. */
+  pantry: number[];
+  /** Reroll a board when the richest start has more than this times the poorest's nearby food. */
+  fairness: number;
   /** Total lights, including the human (id 1). */
   players: number;
   startMass: number;
@@ -110,6 +114,8 @@ export const defaultConfig: Config = {
   orbMassMax: 120,
   giants: 3,
   middleweights: 3,
+  pantry: [0.8, 1.2, 1.7, 2.4, 3.2],
+  fairness: 1.5,
   players: 4,
   startMass: 8,
   G: 2200,
@@ -236,7 +242,41 @@ const NAMES = ["Umbra", "Nyx", "Sable", "Vesper", "Morrow", "Ash", "Dusk", "Rune
 
 // ---------- setup ----------
 
+/**
+ * Food a light can reach cheaply from where it stands: lighter orbs within 600 px, discounted by
+ * distance. What "spawned in a desert" measures.
+ */
+export function pantryScore(s: State, l: Body, cfg: Config): number {
+  let score = 0;
+  for (const o of s.bodies) {
+    if (o.kind !== "orb" || !o.alive || o.mass >= l.mass) continue;
+    const d = dist(l, o, cfg);
+    if (d < 600) score += o.mass / (1 + d / 250);
+  }
+  return score;
+}
+
+/** A board for `seed`, rerolled deterministically until every light's start is about as rich. */
 export function newGame(seed: number, cfg: Config = defaultConfig): State {
+  let best: State | null = null;
+  let bestRatio = Infinity;
+  let roll = seed;
+  for (let i = 0; i < 12; i++) {
+    const s = generate(roll, cfg);
+    const scores = lights(s).map((l) => pantryScore(s, l, cfg));
+    const ratio = Math.max(...scores) / Math.max(0.01, Math.min(...scores));
+    if (ratio < bestRatio) {
+      best = s;
+      bestRatio = ratio;
+    }
+    if (ratio <= cfg.fairness) break;
+    roll = (roll + 0x9e3779b1) >>> 0;
+  }
+  best!.seed = seed;
+  return best!;
+}
+
+function generate(seed: number, cfg: Config): State {
   const s: State = { seed, rng: mulberry32(seed), time: 0, status: "playing", nextId: 1, bodies: [] };
   const rng = s.rng;
   const cx = cfg.width / 2;
@@ -276,8 +316,10 @@ export function newGame(seed: number, cfg: Config = defaultConfig): State {
       const py = rng() * cfg.height;
       let g = Infinity;
       for (const b of s.bodies) {
-        if (b.mass < cfg.gravityMass && b.kind !== "light") continue;
-        g = Math.min(g, dist({ x: px, y: py }, b, cfg) - radiusOf(b.mass, cfg));
+        const edge = dist({ x: px, y: py }, b, cfg) - radiusOf(b.mass, cfg);
+        // Heavy bodies and lights keep the asked-for gap; small orbs only need not to touch.
+        const big = b.mass >= cfg.gravityMass || b.kind === "light";
+        g = Math.min(g, big ? edge : edge - 30 + gap);
       }
       if (g > best) {
         best = g;
@@ -298,6 +340,24 @@ export function newGame(seed: number, cfg: Config = defaultConfig): State {
       ai: i !== 0,
     });
   }
+  // The pantry: every light gets the same orbs at the same distances, co-orbiting with it, so the
+  // opening is a fair race however the rest of the sky falls. Spots inside anything heavy rotate on.
+  for (const l of s.bodies.filter((b) => b.kind === "light")) {
+    const base = rng() * Math.PI * 2;
+    cfg.pantry.forEach((mass, i) => {
+      const d = 90 + i * 40;
+      for (let turn = 0; turn < 6; turn++) {
+        const a = base + i * 2.399 + turn * 1.047;
+        const x = wrap(l.x + Math.cos(a) * d, cfg.width);
+        const y = wrap(l.y + Math.sin(a) * d, cfg.height);
+        const clear = s.bodies.every((b) => b.mass < mass || dist({ x, y }, b, cfg) > radiusOf(b.mass, cfg) + radiusOf(mass, cfg) + 30);
+        if (clear) {
+          drifting("orb", mass, x, y);
+          break;
+        }
+      }
+    });
+  }
   // Middleweights: a quarter to a half of a giant, kept well away from everything heavy.
   for (let i = 0; i < cfg.middleweights; i++) {
     const mass = cfg.orbMassMax * (0.25 + rng() * 0.25);
@@ -306,7 +366,7 @@ export function newGame(seed: number, cfg: Config = defaultConfig): State {
   }
   // Everything else is lighter than a starting light's future: specks mostly, some morsels, a few
   // prizes that a grown light can take. None of these attract.
-  for (let i = giants.length + cfg.middleweights; i < cfg.orbs; i++) {
+  for (let i = giants.length + cfg.middleweights + cfg.pantry.length * cfg.players; i < cfg.orbs; i++) {
     const u = rng();
     const top = Math.min(cfg.gravityMass * 0.6, cfg.orbMassMax * 0.15);
     const mass = u < 0.6 ? cfg.orbMassMin + rng() * 1.6 : u < 0.85 ? 2 + rng() * 4 : 6 + rng() * (top - 6);
