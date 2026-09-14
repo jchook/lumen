@@ -48,6 +48,8 @@ export interface Body {
   warp: number;
   /** Burning hard: the autopilot aims for `sprint` instead of cruise, whatever the distance. */
   push: boolean;
+  /** Mass this body has absorbed and not yet given back. Giants flare it out again. */
+  fed: number;
 }
 
 /**
@@ -100,6 +102,13 @@ export interface Config {
   radiusFloor: number;
   /** Mass per second per px of overlap flowing from lighter to heavier. */
   absorbRate: number;
+  /**
+   * The glow is a soft hitbox. Absorption begins when halos touch, at `aura` times the sum of the
+   * core radii, and ramps up (with the square of how deep the halos overlap) to `auraRate` of the
+   * core rate where the cores meet. A near miss is a bite, not a blank.
+   */
+  aura: number;
+  auraRate: number;
   /** Fraction of mass thrown out by a full-strength burn. */
   burnFraction: number;
   /** Speed of the exhaust relative to the light, px/s. */
@@ -134,10 +143,20 @@ export interface Config {
   prizeMin: number;
   /** Seconds a prize takes to warp in, during which it can't touch or be touched. */
   prizeWarp: number;
+  /**
+   * A prize comes in pieces, none heavier than this share of the lightest light standing, so the
+   * whole field can race for it and the nimble can take more of it.
+   */
+  prizePiece: number;
   /** Giant flares: seconds between them per giant (0 = never), orbs per flare, mass per orb. */
   flareEvery: number;
   flareCount: number;
   flareMass: number;
+  /**
+   * Giants are the sky's sinks: everything that falls in would be gone for good. So each flare
+   * also gives back this share of what the giant has eaten since it last flared, as more orbs.
+   */
+  flareReturn: number;
 }
 
 export const defaultConfig: Config = {
@@ -163,6 +182,8 @@ export const defaultConfig: Config = {
   radiusScale: 4,
   radiusFloor: 3,
   absorbRate: 2.5,
+  aura: 1.6,
+  auraRate: 0.1,
   burnFraction: 0.035,
   ejectSpeed: 1100,
   burnCooldown: 0.15,
@@ -181,9 +202,11 @@ export const defaultConfig: Config = {
   prizeShare: 0.7,
   prizeMin: 6,
   prizeWarp: 4,
+  prizePiece: 0.6,
   flareEvery: 40,
   flareCount: 6,
   flareMass: 1,
+  flareReturn: 0.6,
 };
 
 export type Ev =
@@ -191,7 +214,7 @@ export type Ev =
   | { type: "gone"; id: number; kind: Kind; name: string; by: number }
   | { type: "burn"; id: number; x: number; y: number; dx: number; dy: number; mass: number }
   | { type: "arrive"; id: number }
-  | { type: "prize"; id: number; x: number; y: number; mass: number }
+  | { type: "prize"; id: number; x: number; y: number; mass: number; pieces: number }
   | { type: "flare"; id: number; x: number; y: number }
   | { type: "bell"; winner: number }
   | { type: "win"; id: number }
@@ -282,11 +305,15 @@ function makeBody(s: State, kind: Kind, x: number, y: number, mass: number, extr
     prize: false,
     warp: 0,
     push: false,
+    fed: 0,
     ...extra,
   };
   s.bodies.push(b);
   return b;
 }
+
+/** Centre distance at which two bodies' halos touch and absorption begins. */
+export const auraReach = (m1: number, m2: number, cfg: Config): number => (radiusOf(m1, cfg) + radiusOf(m2, cfg)) * cfg.aura;
 
 /** Speed of a circular orbit at distance d around mass M (with softening). */
 export function orbitalSpeed(M: number, d: number, cfg: Config): number {
@@ -533,7 +560,7 @@ interface Mover {
  * One control step: the burn (direction and strength) that moves `b`'s velocity toward what it
  * needs to reach the target, which is moving at (tvx, tvy). Null when it's already close enough.
  */
-export function steer(b: Mover, tx: number, ty: number, tvx: number, tvy: number, cfg: Config, push = false): { dx: number; dy: number; strength: number } | null {
+export function steer(b: Mover, tx: number, ty: number, tvx: number, tvy: number, cfg: Config, push = false, brake = false): { dx: number; dy: number; strength: number } | null {
   const [dx, dy] = delta(b.x, b.y, tx, ty, cfg);
   const d = Math.hypot(dx, dy);
   if (d < 1e-6) return null;
@@ -544,9 +571,11 @@ export function steer(b: Mover, tx: number, ty: number, tvx: number, tvy: number
   let ex = tvx + ux * speed - b.vx;
   let ey = tvy + uy * speed - b.vy;
   // Never brake: if we're already closing faster than wanted, keep it. Only fix the sideways miss
-  // and add closing speed when short of it. Drift is free; burns aren't.
+  // and add closing speed when short of it. Drift is free; burns aren't. The exception is a chase:
+  // something that can dodge is caught by arriving slowly enough to turn with it, not by flying
+  // past it at speed and paying to come back.
   const along = ex * ux + ey * uy;
-  if (along < 0) {
+  if (along < 0 && !brake) {
     ex -= along * ux;
     ey -= along * uy;
   }
@@ -638,7 +667,7 @@ function pilot(s: State, cfg: Config, ev: Ev[]): void {
       continue;
     }
     if (b.cooldown > 0) continue;
-    const c = b.goal.orbit && t.body ? steerOrbit(b, t.x, t.y, t.vx, t.vy, t.body.mass, b.goal.orbit, cfg) : steer(b, t.x, t.y, t.vx, t.vy, cfg, b.push);
+    const c = b.goal.orbit && t.body ? steerOrbit(b, t.x, t.y, t.vx, t.vy, t.body.mass, b.goal.orbit, cfg) : steer(b, t.x, t.y, t.vx, t.vy, cfg, b.push, t.body?.kind === "light");
     if (!c) continue;
     const before = b.mass;
     if (burn(s, b.id, c.dx, c.dy, c.strength, cfg, ev)) b.spent += before - b.mass;
@@ -691,7 +720,7 @@ export function plan(s: State, me: Body, goal: Goal, cfg: Config, seconds = 6, d
       }
     }
     if (g.cooldown <= 0) {
-      const c = goal.orbit && target ? steerOrbit(g, tx, ty, tvx, tvy, target.mass, goal.orbit, cfg) : steer(g, tx, ty, tvx, tvy, cfg);
+      const c = goal.orbit && target ? steerOrbit(g, tx, ty, tvx, tvy, target.mass, goal.orbit, cfg) : steer(g, tx, ty, tvx, tvy, cfg, false, target?.kind === "light");
       if (goal.orbit && target && !c && i > 2) return { path, cost, arrives: true, t: i * dt, blocked };
       if (c) {
         const k = Math.min(1, Math.max(0.15, c.strength));
@@ -786,7 +815,15 @@ function vanish(s: State, b: Body, by: number, ev: Ev[]): void {
   ev.push({ type: "gone", id: b.id, kind: b.kind, name: b.name, by });
 }
 
-/** Overlapping bodies: lumens flow from lighter to heavier. Equal masses trade nothing. */
+/**
+ * Overlapping bodies: lumens flow from lighter to heavier. Equal masses trade nothing. The flow is
+ * the core overlap at full rate, plus the halo overlap at a fraction, so touching glows drain a
+ * little and touching cores drain a lot. The halo only counts when a light is involved and the
+ * thing being drained is not a well: it is a rule about catching light things, not about the sky,
+ * so giants don't merge on sight, don't hoover the food that orbits them, and can't be eaten from
+ * a distance by a light that has outgrown them. Exhaust only counts when a core actually hits it:
+ * it is born inside its light's halo and must be free to leave.
+ */
 function absorb(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   const bs = s.bodies;
   for (let i = 0; i < bs.length; i++) {
@@ -797,7 +834,14 @@ function absorb(s: State, cfg: Config, dt: number, ev: Ev[]): void {
       if (!b.alive || b.warp > 0 || a.mass === b.mass) continue;
       const [big, small] = a.mass > b.mass ? [a, b] : [b, a];
       const d = dist(a, b, cfg);
-      const overlap = radiusOf(big.mass, cfg) + radiusOf(small.mass, cfg) - d;
+      const R = radiusOf(big.mass, cfg) + radiusOf(small.mass, cfg);
+      const core = R - d;
+      let overlap = Math.max(0, core);
+      if (!a.from && !b.from && cfg.aura > 1 && (a.kind === "light" || b.kind === "light") && !attracts(small, cfg)) {
+        const band = R * (cfg.aura - 1);
+        const halo = Math.min(band, R * cfg.aura - d);
+        if (halo > 0) overlap += cfg.auraRate * band * (halo / band) * (halo / band);
+      }
       if (overlap <= 0) continue;
       const amount = Math.min(small.mass, cfg.absorbRate * overlap * dt);
       if (amount <= 0) continue;
@@ -807,26 +851,42 @@ function absorb(s: State, cfg: Config, dt: number, ev: Ev[]): void {
         big.vx = (big.vx * big.mass + small.vx * amount) / total;
         big.vy = (big.vy * big.mass + small.vy * amount) / total;
       }
+      // Only food counts as fed: a giant that swallows another well keeps it, or the sky would
+      // turn a merged giant into a hundred specks.
+      const food = small.mass < cfg.gravityMass;
       big.mass += amount;
+      if (food) big.fed += amount;
       small.mass -= amount;
       ev.push({ type: "absorb", eater: big.id, food: small.id, amount });
       if (small.mass <= cfg.dust) {
         big.mass += small.mass;
+        if (food) big.fed += small.mass;
         vanish(s, small, big.id, ev);
       }
     }
   }
 }
 
-/** Every so often a heavy orb appears and falls toward the nearest giant. Race for it. */
+/**
+ * Every so often a prize appears and falls toward the nearest giant. Race for it. It is worth a
+ * share of the biggest light, but it comes as a cluster of pieces the lightest light can eat, so
+ * it is never a meal only the leader can take: whoever is quickest takes the most of it.
+ */
 function prizes(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   if (!cfg.prizeEvery) return;
   const slot = Math.floor(s.time / cfg.prizeEvery);
   if (slot === 0 || slot === Math.floor((s.time - dt) / cfg.prizeEvery)) return;
   const giants = s.bodies.filter((b) => b.kind === "orb" && attracts(b, cfg));
   if (!giants.length) return;
-  const biggest = Math.max(...lights(s).map((l) => l.mass));
-  const mass = Math.max(cfg.prizeMin, biggest * cfg.prizeShare);
+  const masses = lights(s).map((l) => l.mass);
+  if (!masses.length) return;
+  const biggest = Math.max(...masses);
+  const lightest = Math.min(...masses);
+  // Up to twelve pieces. When the field is lopsided the prize shrinks to what the runt can eat
+  // rather than growing pieces the runt can't: it is the equaliser, not the leader's dessert.
+  const piece = Math.max(1, lightest * cfg.prizePiece);
+  const mass = Math.max(cfg.prizeMin, Math.min(biggest * cfg.prizeShare, 12 * piece));
+  const pieces = Math.min(12, Math.max(1, Math.ceil(mass / piece)));
   // A spot well clear of everything heavy, found from a hash of the slot so it's deterministic.
   let bx = 0;
   let by = 0;
@@ -850,11 +910,26 @@ function prizes(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   const d = Math.hypot(dx, dy) || 1;
   // Sub-orbital: it spirals in and is gone in a while.
   const v = orbitalSpeed(near.mass, d, cfg) * 0.5;
-  const p = makeBody(s, "orb", bx, by, mass, { vx: (-dy / d) * v + near.vx, vy: (dx / d) * v + near.vy, prize: true, warp: cfg.prizeWarp });
-  ev.push({ type: "prize", id: p.id, x: p.x, y: p.y, mass });
+  const vx = (-dy / d) * v + near.vx;
+  const vy = (dx / d) * v + near.vy;
+  // The pieces sit on a ring around the spot, far enough apart that their halos don't touch.
+  const ring = pieces === 1 ? 0 : 14 + pieces * 6;
+  let first = 0;
+  for (let k = 0; k < pieces; k++) {
+    const a = (k / pieces) * Math.PI * 2 + slot * 0.9;
+    const p = makeBody(s, "orb", wrap(bx + Math.cos(a) * ring, cfg.width), wrap(by + Math.sin(a) * ring, cfg.height), mass / pieces, { vx, vy, prize: true, warp: cfg.prizeWarp });
+    if (!first) first = p.id;
+  }
+  ev.push({ type: "prize", id: first, x: bx, y: by, mass, pieces });
 }
 
-/** Giants shed a ring of food outward now and then, staggered so they don't all fire at once. */
+/**
+ * Giants shed a ring of food outward now and then, staggered so they don't all fire at once. A
+ * giant that has been eating sheds more: the base ring plus a share of what it has taken in since
+ * it last flared, so what falls into a giant comes back out as food rather than leaving the game.
+ * The ring is launched on a tangential orbit from outside the giant's halo, so it swings out and
+ * back without grazing the glow that would take it straight back.
+ */
 function flares(s: State, cfg: Config, dt: number, ev: Ev[]): void {
   if (!cfg.flareEvery) return;
   const giants = s.bodies.filter((b) => b.kind === "orb" && attracts(b, cfg) && !b.prize);
@@ -862,17 +937,24 @@ function flares(s: State, cfg: Config, dt: number, ev: Ev[]): void {
     const phase = (i / Math.max(1, giants.length)) * cfg.flareEvery;
     const slot = Math.floor((s.time - phase) / cfg.flareEvery);
     if (slot <= 0 || slot === Math.floor((s.time - dt - phase) / cfg.flareEvery)) return;
-    const total = cfg.flareCount * cfg.flareMass;
+    // At most 18 orbs of at most one and a half times the base mass per flare, so the ring is
+    // always speck food; a giant that has eaten a lot pays it back over several flares.
+    const base = cfg.flareCount * cfg.flareMass;
+    const back = Math.min(Math.max(0, g.fed) * cfg.flareReturn, 18 * 1.5 * cfg.flareMass - base);
+    const total = base + back;
     if (g.mass - total < cfg.gravityMass) return;
     g.mass -= total;
+    g.fed = Math.max(0, g.fed - back);
+    const count = Math.min(18, Math.max(cfg.flareCount, Math.round(total / cfg.flareMass)));
+    const each = total / count;
     const R = radiusOf(g.mass, cfg);
-    for (let k = 0; k < cfg.flareCount; k++) {
-      const a = (k / cfg.flareCount) * Math.PI * 2 + slot * 0.7;
-      const d = R + 30;
-      const v = orbitalSpeed(g.mass, d, cfg);
-      makeBody(s, "orb", wrap(g.x + Math.cos(a) * d, cfg.width), wrap(g.y + Math.sin(a) * d, cfg.height), cfg.flareMass, {
-        vx: g.vx + -Math.sin(a) * v * 1.2 + Math.cos(a) * v * 0.35,
-        vy: g.vy + Math.cos(a) * v * 1.2 + Math.sin(a) * v * 0.35,
+    const d = Math.max(R + 30, auraReach(g.mass, each, cfg) + 12);
+    const v = orbitalSpeed(g.mass, d, cfg) * 1.15;
+    for (let k = 0; k < count; k++) {
+      const a = (k / count) * Math.PI * 2 + slot * 0.7;
+      makeBody(s, "orb", wrap(g.x + Math.cos(a) * d, cfg.width), wrap(g.y + Math.sin(a) * d, cfg.height), each, {
+        vx: g.vx - Math.sin(a) * v,
+        vy: g.vy + Math.cos(a) * v,
       });
     }
     ev.push({ type: "flare", id: g.id, x: g.x, y: g.y });

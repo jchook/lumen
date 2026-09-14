@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { agility, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, pantryScore, plan, predict, queueGoal, radiusOf, setGoal, step, type Config, type State } from "./index";
-import { STYLES, botTurn, decide } from "./bots";
+import { agility, auraReach, burn, defaultConfig, delta, dist, human, lights, newGame, orbitalSpeed, pantryScore, plan, predict, queueGoal, radiusOf, setGoal, step, type Config, type State } from "./index";
+import { STYLES, botTurn, decide, forage } from "./bots";
 
 const cfg: Config = { ...defaultConfig, roundSeconds: 0, prizeEvery: 0, flareEvery: 0 };
 const empty = (seed = 1): State => ({ seed, rng: () => 0.5, time: 0, onGrid: true, status: "playing", nextId: 1, bodies: [] });
 const add = (s: State, kind: "orb" | "light", x: number, y: number, mass: number, extra: Partial<State["bodies"][number]> = {}) => {
-  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, queue: [], spent: 0, trait: "rival" as const, prize: false, warp: 0, push: false, ...extra };
+  const b = { id: s.nextId++, kind, x, y, vx: 0, vy: 0, mass, name: "", ai: false, alive: true, anchored: false, from: 0, cooldown: 0, goal: null, queue: [], spent: 0, trait: "rival" as const, prize: false, warp: 0, push: false, fed: 0, ...extra };
   s.bodies.push(b);
   return b;
 };
@@ -271,6 +271,34 @@ describe("bots", () => {
     expect(decide(s, bot.id, cfg)).toBeNull();
     expect(bot.goal).toBeNull();
   });
+  test("forage: with nothing in range, head for the richest cluster on the board rather than drift", () => {
+    const s = empty();
+    const bot = add(s, "light", 300, 300, 10, { name: "Umbra", ai: true });
+    // One speck far away on its own; a cluster of three farther still.
+    add(s, "orb", 1300, 300, 1.5);
+    const c1 = add(s, "orb", 300, 1500, 1.5);
+    add(s, "orb", 340, 1520, 1.5);
+    add(s, "orb", 280, 1550, 1.5);
+    expect(decide(s, bot.id, cfg)).toBeNull();
+    expect(bot.goal?.follow).toBeGreaterThan(0);
+    const picked = s.bodies.find((b) => b.id === bot.goal!.follow)!;
+    expect(dist(picked, c1, cfg)).toBeLessThan(150);
+    expect(forage(s, bot, cfg, STYLES.rival)!.value).toBeCloseTo(4.5, 6);
+  });
+  test("forage: a light that has outgrown every crumb stays put", () => {
+    const s = empty();
+    const bot = add(s, "light", 300, 300, 60, { name: "Umbra", ai: true });
+    add(s, "orb", 1300, 300, 1.5);
+    add(s, "orb", 300, 1500, 2);
+    expect(forage(s, bot, cfg, STYLES.rival)).toBeNull();
+  });
+  test("forage: never through something heavier", () => {
+    const s = empty();
+    const bot = add(s, "light", 300, 300, 10, { name: "Umbra", ai: true });
+    add(s, "orb", 700, 300, 1.5);
+    add(s, "orb", 500, 300, 150);
+    expect(forage(s, bot, cfg, STYLES.rival)).toBeNull();
+  });
   test("botTurn spreads decisions over time", () => {
     const s = newGame(5, cfg);
     let burns = 0;
@@ -409,11 +437,27 @@ describe("rounds, prizes, flares", () => {
     const ev = run(s, 3.1, c);
     const p = ev.find((e) => e.type === "prize");
     expect(p).toBeDefined();
-    const prize = s.bodies.find((b) => b.prize)!;
-    expect(prize.mass).toBeGreaterThanOrEqual(c.prizeMin);
+    const pieces = s.bodies.filter((b) => b.prize);
+    expect(pieces.reduce((m, b) => m + b.mass, 0)).toBeCloseTo(Math.max(c.prizeMin, 10 * c.prizeShare), 6);
+    const prize = pieces[0]!;
     const before = dist(prize, s.bodies[0]!, c);
     run(s, 8, c);
     expect(dist(prize, s.bodies[0]!, c)).toBeLessThan(before);
+  });
+  test("a prize comes in pieces the lightest light can eat, and its halo-spaced pieces don't eat each other", () => {
+    const c = { ...cfg, prizeEvery: 3 };
+    const s = empty();
+    add(s, "orb", 1200, 1200, 150);
+    add(s, "light", 400, 400, 60, { name: "You" });
+    add(s, "light", 2000, 400, 9, { name: "Umbra", ai: true });
+    const ev = run(s, 3.1, c);
+    const p = ev.find((e) => e.type === "prize")!;
+    expect(p.type === "prize" && p.pieces).toBeGreaterThan(1);
+    const pieces = s.bodies.filter((b) => b.prize);
+    expect(pieces.length).toBe(p.type === "prize" ? p.pieces : 0);
+    for (const b of pieces) expect(b.mass).toBeLessThan(9);
+    expect(pieces.reduce((m, b) => m + b.mass, 0)).toBeCloseTo(60 * c.prizeShare, 6);
+    for (const a of pieces) for (const b of pieces) if (a !== b) expect(dist(a, b, c)).toBeGreaterThan(auraReach(a.mass, b.mass, c));
   });
   test("a prize warps in: untouchable and weightless until it has arrived", () => {
     const s = empty();
@@ -436,6 +480,56 @@ describe("rounds, prizes, flares", () => {
     expect(ev.some((e) => e.type === "flare")).toBe(true);
     expect(g.mass).toBeCloseTo(150 - c.flareCount * c.flareMass, 6);
     expect(s.bodies.filter((b) => b.kind === "orb" && b.mass === c.flareMass).length).toBe(c.flareCount);
+  });
+  test("a giant that has eaten flares most of it back out as food, and the ring never falls back in", () => {
+    const c = { ...cfg, flareEvery: 4 };
+    const s = empty();
+    const g = add(s, "orb", 1200, 1200, 150);
+    add(s, "orb", 1200 + radiusOf(150, c) + 2, 1200, 20);
+    run(s, 3.5, c);
+    expect(g.fed).toBeCloseTo(20, 3);
+    const before = g.mass;
+    run(s, 0.7, c);
+    const ring = s.bodies.filter((b) => b.kind === "orb" && b !== g && b.alive);
+    const shed = ring.reduce((m, b) => m + b.mass, 0);
+    expect(shed).toBeCloseTo(c.flareCount * c.flareMass + 20 * c.flareReturn, 3);
+    expect(before - g.mass).toBeCloseTo(shed, 3);
+    expect(ring.length).toBeGreaterThan(c.flareCount);
+    run(s, 40, { ...c, flareEvery: 0 });
+    expect(ring.every((b) => b.alive && b.mass === shed / ring.length)).toBe(true);
+  });
+});
+
+describe("aura", () => {
+  test("halos that touch drain a little, cores that touch drain a lot, and nothing happens beyond the halo", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 20, { name: "You", anchored: true });
+    const reach = auraReach(20, 5, cfg);
+    const far = add(s, "orb", 500 + reach + 1, 500, 5, { anchored: true });
+    run(s, 1);
+    expect(far.mass).toBe(5);
+    far.x = 500 + reach - 4;
+    run(s, 1);
+    const halo = 5 - far.mass;
+    expect(halo).toBeGreaterThan(0);
+    // Four px into the halo drains a few percent a second; four px into the core, a good bite.
+    expect(halo).toBeLessThan(0.3);
+    far.x = 500 + radiusOf(20, cfg) + radiusOf(far.mass, cfg) - 4;
+    const m0 = far.mass;
+    run(s, 0.1);
+    expect(m0 - far.mass).toBeGreaterThan(halo * 5);
+    expect(me.mass + far.mass).toBeCloseTo(25, 6);
+  });
+  test("exhaust leaves its light's halo untouched", () => {
+    const s = empty();
+    const me = add(s, "light", 500, 500, 10, { name: "You" });
+    burn(s, me.id, 1, 0, 1, cfg);
+    const ex = s.bodies.find((b) => b.from === me.id)!;
+    const m0 = ex.mass;
+    const v0 = me.vx;
+    run(s, 0.1);
+    expect(ex.mass).toBeCloseTo(m0 * Math.pow(0.5, 0.1 / cfg.exhaustHalfLife), 3);
+    expect(me.vx).toBeCloseTo(v0, 6);
   });
 });
 

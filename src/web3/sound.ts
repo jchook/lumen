@@ -1076,10 +1076,15 @@ const SOFT: Array<[number, number, number]> = [[1, 1, 1], [2.01, 0.3, 0.6], [3.0
 const CHURCH: Array<[number, number, number]> = [[1, 1, 1], [2.76, 0.45, 0.7], [5.4, 0.2, 0.45], [8.9, 0.08, 0.3]];
 
 /**
- * Burning is the drum kit. Every burn lands on a sixteenth of the song (the sim only lets burns
- * happen on the grid), and the sound depends on where in the bar it falls: downbeats get a low kick
- * tuned to the key's root, other on-beats a tom on the fifth, off-beats a tight tick. Strength sets
- * how hard it's hit. Together, everyone's burning is the rhythm section.
+ * Burning is the drum kit, and the kit is tuned to the song. Every burn lands on a sixteenth (the
+ * sim only lets burns happen on the grid) and plays a tone of the current chord by where it falls
+ * in the bar: the downbeat is a low kick on the chord's root, the other beats a tom on its fifth,
+ * the eighths the third an octave up, the off-sixteenths a tick on the fifth above that. So a run
+ * of burns (a push, a long correction) walks the chord like a tom fill, and it moves with the
+ * progression. Each hit is layered like a real drum: a sub sine for the weight on the beats, a
+ * saturated body with a pitch drop for the note, a triangle an octave up for the wood of the
+ * shell, a snap of noise for the stick, and a breath of filtered noise for the exhaust. Strength
+ * sets how hard it's hit: longer, brighter and a little louder, not just louder.
  */
 export function soundBurn(strength: number): void {
   if (!ctx || !dry || !send) return;
@@ -1089,60 +1094,92 @@ export function soundBurn(strength: number): void {
   const slot = slotNow();
   const down = slot % 8 === 0;
   const onBeat = slot % 4 === 0;
-  const off = slot % 2 === 1;
-  // Pitched body: a sine that drops fast, tuned to the key. The downbeat is a low kick on the root;
-  // everything else sits an octave above the bass (fifth, then root) so it is heard as its own
-  // voice, a wood tom, and not lost under the kick and the bass line.
-  const body = c.createOscillator();
-  body.type = "sine";
-  const f0 = down ? freq(0, 2) : onBeat ? freq(4, 3) : freq(0, 4);
-  body.frequency.setValueAtTime(f0 * (down ? 3.2 : 2.4), t);
-  body.frequency.exponentialRampToValueAtTime(f0, t + (down ? 0.09 : 0.06));
+  const eighth = slot % 2 === 0;
+  // The note: a chord tone, higher and shorter the finer the subdivision.
+  const deg = down ? song.chord : onBeat ? song.chord + 4 : eighth ? song.chord + 2 : song.chord + 4;
+  const oct = down ? 2 : onBeat ? 3 : 4;
+  const f0 = freq(deg, oct);
+  const vel = 0.7 + 0.3 * k;
+  const life = (down ? 0.4 : onBeat ? 0.3 : eighth ? 0.22 : 0.14) * (0.8 + 0.4 * k);
+  const kit = drumBus ?? dry;
+  // Body and shell go through one saturator, so the harder hits get the grit.
   const drive = c.createWaveShaper();
   const curve = new Float32Array(256);
+  const amount = (down ? 2.4 : 1.6) + 0.8 * k;
   for (let i = 0; i < 256; i++) {
     const x = (i / 255) * 2 - 1;
-    curve[i] = Math.tanh(x * (down ? 2.2 : 1.4));
+    curve[i] = Math.tanh(x * amount) / Math.tanh(amount);
   }
   drive.curve = curve;
-  const bg = c.createGain();
-  const peak = (off ? 0.14 : down ? 0.3 : 0.24) * (0.5 + 0.5 * k);
-  const life = off ? 0.16 : down ? 0.32 : 0.24;
-  bg.gain.setValueAtTime(0.0001, t);
-  bg.gain.exponentialRampToValueAtTime(peak, t + 0.006);
-  bg.gain.exponentialRampToValueAtTime(0.0001, t + life);
-  body.connect(drive).connect(bg).connect(drumBus ?? dry);
+  const mix = c.createGain();
+  mix.gain.value = 1;
+  mix.connect(drive).connect(kit);
   const toVerb = c.createGain();
-  toVerb.gain.value = down ? 0.25 : 0.12;
-  bg.connect(toVerb).connect(send);
+  toVerb.gain.value = down ? 0.3 : eighth ? 0.15 : 0.08;
+  drive.connect(toVerb).connect(send);
+  const env = (g: GainNode, peak: number, attack: number, decay: number) => {
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+  };
+  // Body: a sine dropping onto the note from above, the tom's "boo"; a full octave on the downbeat.
+  const body = c.createOscillator();
+  body.type = "sine";
+  body.frequency.setValueAtTime(f0 * (down ? 2.2 : 1.45), t);
+  body.frequency.exponentialRampToValueAtTime(f0, t + (down ? 0.08 : 0.04));
+  const bg = c.createGain();
+  const peak = (down ? 0.34 : onBeat ? 0.28 : eighth ? 0.22 : 0.15) * vel;
+  env(bg, peak, 0.004, life);
+  body.connect(bg).connect(mix);
   body.start(t);
   body.stop(t + life + 0.05);
-  // Transient: a short bright click so it cuts through, brighter when hit harder.
-  const click = noise(0.05);
-  const hp = c.createBiquadFilter();
-  hp.type = off ? "bandpass" : "highpass";
-  hp.frequency.value = off ? 2600 : 1800 + 1600 * k;
-  hp.Q.value = off ? 2 : 0.7;
-  const cg = c.createGain();
-  cg.gain.setValueAtTime(0.0001, t);
-  cg.gain.exponentialRampToValueAtTime((off ? 0.05 : 0.07) * (0.4 + 0.6 * k), t + 0.003);
-  cg.gain.exponentialRampToValueAtTime(0.0001, t + (off ? 0.03 : 0.045));
-  click.connect(hp).connect(cg).connect(drumBus ?? dry);
-  click.start(t);
-  // The exhaust: a puff of air in the upper mids, a band the pad and the bass leave empty, on every
-  // burn whatever the slot. It is the part that always says "burning", louder the harder the burn.
-  const puff = noise(0.16);
-  const pb = c.createBiquadFilter();
-  pb.type = "bandpass";
-  pb.frequency.setValueAtTime(1500, t);
-  pb.frequency.exponentialRampToValueAtTime(700, t + 0.14);
-  pb.Q.value = 1.1;
-  const pg = c.createGain();
-  pg.gain.setValueAtTime(0.0001, t);
-  pg.gain.exponentialRampToValueAtTime(0.09 * (0.4 + 0.6 * k), t + 0.008);
-  pg.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
-  puff.connect(pb).connect(pg).connect(dry);
-  puff.start(t);
+  // Shell: a triangle an octave up with the same drop, gone in a third of the time.
+  const shell = c.createOscillator();
+  shell.type = "triangle";
+  shell.frequency.setValueAtTime(f0 * 2 * (down ? 2.2 : 1.45), t);
+  shell.frequency.exponentialRampToValueAtTime(f0 * 2, t + (down ? 0.08 : 0.04));
+  const sg = c.createGain();
+  env(sg, peak * 0.35, 0.003, life * 0.35);
+  shell.connect(sg).connect(mix);
+  shell.start(t);
+  shell.stop(t + life * 0.35 + 0.05);
+  // Sub: on the beats, a clean sine an octave under the body, so the beats have weight of their
+  // own. It skips the saturator so the low end stays round.
+  if (onBeat) {
+    const sub = c.createOscillator();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(f0 / 2, t);
+    const ug = c.createGain();
+    env(ug, (down ? 0.28 : 0.18) * vel, 0.006, down ? 0.3 : 0.22);
+    sub.connect(ug).connect(kit);
+    sub.start(t);
+    sub.stop(t + 0.36);
+  }
+  // Snap: the stick. A burst of noise around the note's upper partials, brighter when hit harder.
+  const snap = noise(0.05);
+  const sb = c.createBiquadFilter();
+  sb.type = "bandpass";
+  sb.frequency.value = eighth ? 2200 + 1800 * k : 3800;
+  sb.Q.value = eighth ? 1.1 : 3;
+  const ng = c.createGain();
+  env(ng, (eighth ? 0.06 : 0.045) * (0.4 + 0.6 * k), 0.002, eighth ? 0.04 : 0.028);
+  snap.connect(sb).connect(ng).connect(kit);
+  snap.start(t);
+  // Breath: the exhaust. Noise swept down through the upper mids, a band the pad and the bass
+  // leave empty, on every burn whatever the slot; longer and louder the harder the burn.
+  const breath = noise(0.3);
+  const bb = c.createBiquadFilter();
+  bb.type = "bandpass";
+  bb.frequency.setValueAtTime(1600, t);
+  bb.frequency.exponentialRampToValueAtTime(500, t + 0.1 + 0.12 * k);
+  bb.Q.value = 1.3;
+  const brg = c.createGain();
+  env(brg, 0.1 * (0.4 + 0.6 * k), 0.008, 0.12 + 0.14 * k);
+  breath.connect(bb).connect(brg).connect(dry);
+  const breathVerb = c.createGain();
+  breathVerb.gain.value = 0.2;
+  brg.connect(breathVerb).connect(send);
+  breath.start(t);
 }
 
 /** A giant sheds a ring: a bright shimmer that spreads out. */

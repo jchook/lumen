@@ -167,9 +167,21 @@ order. The chain is drawn and numbered. A plain tap replaces the whole plan; spa
 distance, then holds it. Faint lanes ring every attractor. Orbits are the safe harbours and the
 highways; getting into one is a maneuver you plan and pay for.
 
-**Events.** Every 45 s a prize appears: a heavy gold orb worth most of the biggest light, falling
-toward the nearest giant on a sub-orbital path, gone in a while. Every 40 s each giant flares a ring
-of six small orbs outward and loses that mass, so giants slowly shrink over a round.
+**Events.** Every 45 s a prize appears, worth most of the biggest light, falling toward the nearest
+giant on a sub-orbital path, gone in a while. It comes as a cluster of up to twelve gold pieces,
+none heavier than the lightest light standing can eat, so it is a race the whole field can enter
+and the nimble take more of; when the field is lopsided the prize shrinks to what the runt can eat
+rather than growing pieces only the leader could. Every 40 s each giant flares a ring of food
+outward: six specks, plus most of whatever has fallen into it since its last flare. Giants are the
+sky's sinks, and this is how what they swallow comes back as food instead of leaving the game, so
+the board never turns into a desert.
+
+**Glow.** The glow is a soft hitbox. Absorption starts when halos touch, at 1.6 times the core
+radii, and ramps up with the square of how deep they overlap to a tenth of the core rate where the
+cores meet. A near miss on a speck is a bite; a near miss on a rival costs them; orbiting a giant
+inside its glow is a slow leak. It only applies where a light is involved, and never to a well
+being drained, so giants don't merge on sight or hoover their own food, and a light that outgrows
+one still has to touch it.
 
 **Push.** Hold a tap and the autopilot burns for sprint speed (320 px/s against a cruise of 100)
 toward that point until you let go, whatever the distance. It is the way to outrun a hunter, and it
@@ -196,8 +208,14 @@ still runs offline.
 pad, mono bass, drum bed with swing. Meals play the lead, and the size of the meal is the size of
 the phrase: a note under 4 lumens, a three-note run to 12, a five-note run with a long held note on
 the whammy bar to 40, and the whole phrase above that, with the bass stepping back to make room.
-A rival is the full lick. Burns are the kit, a tension tone creeps in near anything that can eat
-you, a chime for a prize, a bell for the round, and a tape stop when you are taken.
+A rival is the full lick. Burns are the kit, and the kit is tuned: each burn plays a tone of the
+current chord by where it lands in the bar (the downbeat a low kick on the root, the beats a tom on
+the fifth, the eighths the third an octave up, the off-sixteenths a tick on the fifth above), so a
+push or a long correction walks the chord like a tom fill. A hit is a sub for weight, a saturated
+body with a pitch drop, a triangle shell, a snap for the stick and a breath of swept noise for the
+exhaust; a harder burn is longer and brighter, not just louder. A tension tone creeps in near
+anything that can eat you, a chime for a prize, a bell for the round, and a tape stop when you are
+taken.
 M or the ♪ button top right mutes; ↻ beside it starts a new sky. On phones the first tap unlocks audio and a looping silent track lifts the iOS silent switch. Bloom is a WebGL post-process over the Canvas2D scene (`src/web3/bloom.ts`), toggled in the
 tuning panel.
 
@@ -211,9 +229,23 @@ was 6x.
 otherwise rehearse a trip to each lighter body in range with the same autopilot the player uses and
 chase the best one whose mass beats the price, committing until it is eaten or has cost more than it
 is worth. Rivals are only hunted with a mass margin; hunters keep after one even when no route lands
-within their horizon, as long as it is clear.
+within their horizon, as long as it is clear. With nothing worth a rehearsed trip in range, a bot
+forages: every edible orb on the board is scored by the food around it (a flare ring or a prize
+cluster is one trip), discounted by distance, less the price of getting up to cruise, and it heads
+for the best that isn't behind something heavier. Only a light that has outgrown every crumb sits
+still.
+
+**Chasing.** Following a light is the one case where the autopilot will brake: it arrives slowly
+enough to turn with a sidestep instead of flying past and paying to come back. Burns cost the same
+share of your mass per unit of speed whatever your size, so a hunter and its victim bleed the same
+fraction per dodge and the heavier one bleeds more lumens: hunting a runt is never free. Measured
+with `scripts/chase.ts`, a persistent 60-lumen hunter now catches a 10-lumen bot in about six
+seconds for 13% of its mass (it was 34 to 53%), and cruise chases at two or three to one gain mass.
+Pushing still overshoots and still costs half your mass against a coward; that is the price of it.
 
 ```sh
 bun run arena            # bot-only balance sweep
 bun scripts/trace.ts 3   # one game, masses every ten seconds
+bun scripts/econ.ts 10   # food, wells, lights, leader vs runner-up every 30 s, to the bell
+bun scripts/chase.ts     # hunter vs fleeing victim: catch time and what it cost
 ```

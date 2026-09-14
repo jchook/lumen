@@ -1,5 +1,6 @@
 import {
   mulberry32,
+  auraReach,
   burn,
   burnDeltaV,
   defaultConfig,
@@ -398,8 +399,8 @@ function goalAtCursor(me: Body): Goal {
   const b = under(me);
   if (b && b.mass < me.mass) return { x: b.x, y: b.y, follow: b.id };
   if (b && attracts(b, cfg)) {
-    // Something that could eat me and pulls: enter orbit at my current distance, not too close.
-    const r = Math.max(radiusOf(b.mass, cfg) + radiusOf(me.mass, cfg) + 70, dist(me, b, cfg));
+    // Something that could eat me and pulls: enter orbit at my current distance, clear of its halo.
+    const r = Math.max(auraReach(b.mass, me.mass, cfg) + 40, dist(me, b, cfg));
     return { x: b.x, y: b.y, follow: b.id, orbit: r };
   }
   const [x, y] = toWorld(pointer.x, pointer.y);
@@ -617,10 +618,11 @@ function onEvents(ev: Ev[]): void {
         else if (by?.kind === "light") bark(`${by.name} took ${e.name}`, identity(by), "took", 0, true);
         else if (by && by.mass >= cfg.gravityMass && was) bark(`${e.name} fell into a giant`, was.hue, "fell", 0, true);
         else if (by && was) bark(`${e.name} was absorbed`, was.hue, "fell", 0, true);
-      } else if (was?.prize && by && by.kind === "light" && by !== me) bark(`${by.name} took the prize`, identity(by), "prize", 0);
+      } else if (was?.prize && by && by.kind === "light" && by !== me) bark(`${by.name} is taking the prize`, identity(by), "prize", 8);
     } else if (e.type === "prize") {
-      say(`a ${e.mass.toFixed(0)}-lumen prize is falling`);
-      bark(`a ${e.mass.toFixed(0)}-lumen prize is warping in`, GB.yellow, "prize", 0);
+      const pieces = e.pieces > 1 ? ` in ${e.pieces} pieces` : "";
+      say(`a ${e.mass.toFixed(0)}-lumen prize${pieces} is falling`);
+      bark(`a ${e.mass.toFixed(0)}-lumen prize${pieces} is warping in`, GB.yellow, "prize", 0);
       soundPrize();
     } else if (e.type === "flare") {
       const g = state.bodies.find((x) => x.id === e.id);
@@ -1395,6 +1397,8 @@ const SLIDERS: SliderDef[] = [
   { key: "orbMassMax", min: 20, max: 300, stepSize: 5, restart: true },
   { key: "giants", min: 0, max: 6, stepSize: 1, restart: true },
   { key: "absorbRate", min: 0.2, max: 10, stepSize: 0.1 },
+  { key: "aura", min: 1, max: 3, stepSize: 0.1 },
+  { key: "auraRate", min: 0, max: 1, stepSize: 0.05 },
   { key: "burnFraction", min: 0.01, max: 0.15, stepSize: 0.005 },
   { key: "ejectSpeed", min: 100, max: 1200, stepSize: 20 },
   { key: "burnCooldown", min: 0.02, max: 0.6, stepSize: 0.02 },
@@ -1407,7 +1411,9 @@ const SLIDERS: SliderDef[] = [
   { key: "sprint", min: 100, max: 400, stepSize: 10 },
   { key: "roundSeconds", min: 0, max: 600, stepSize: 30, restart: true },
   { key: "prizeEvery", min: 0, max: 120, stepSize: 5 },
+  { key: "prizePiece", min: 0.1, max: 1, stepSize: 0.05 },
   { key: "flareEvery", min: 0, max: 120, stepSize: 5 },
+  { key: "flareReturn", min: 0, max: 1, stepSize: 0.05 },
   { key: "approach", min: 0.2, max: 3, stepSize: 0.1 },
 ];
 const slidersEl = $("sliders");
